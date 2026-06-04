@@ -1,0 +1,17 @@
+{
+  "name": "enterprise-newman-framework",
+  "version": "2.0.0",
+  "description": "Newman automation framework with DOCX/TXT evidence, Postman API live fetch, and configurable reporting",
+  "scripts": {
+    "test": "node runner.js",
+    "clear": "node clearReports.js"
+  },
+  "dependencies": {
+    "docx": "^8.5.0",
+    "js-yaml": "^4.1.0",
+    "newman": "^6.1.0",
+    "newman-reporter-htmlextra": "^1.23.1",
+    "papaparse": "^5.4.1",
+    "xlsx": "^0.18.5"
+  }
+}
