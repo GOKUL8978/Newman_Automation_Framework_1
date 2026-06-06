@@ -496,9 +496,11 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
 .hdr-row{display:flex;gap:12px;flex-wrap:wrap;}
 .hdr-blk{flex:1;min-width:240px;}
 .hdr-lbl{font-size:10px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;}
-.hdrt{width:100%;border-collapse:collapse;font-size:11px;}
+.hdrt{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed;}
 .hdrt th{background:var(--th-bg);padding:4px 9px;text-align:left;font-weight:600;border-bottom:1px solid var(--border);color:var(--text2);}
-.hdrt td{padding:4px 9px;border-bottom:1px solid var(--td-sep);word-break:break-all;color:var(--text);}
+.hdrt th:first-child{width:38%;}
+.hdrt th:last-child{width:62%;}
+.hdrt td{padding:4px 9px;border-bottom:1px solid var(--td-sep);word-break:break-all;color:var(--text);vertical-align:top;}
 
 /* ── scrollbar ──────────────────────────────────────── */
 ::-webkit-scrollbar{width:5px;height:5px;}
