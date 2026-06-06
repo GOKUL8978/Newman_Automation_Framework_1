@@ -83,7 +83,11 @@ function generateExtentReport(reportFolder, evidenceData, meta) {
         const ok=!iter.apis.some(a=>a.result==='FAILED');
         const cls=ok?'pass':'fail';
         return `
-        <div class="si ${cls}" id="si-${idx}" data-status="${cls}" onclick="showTest(${idx})">
+        <div class="si ${cls}"
+     id="si-${idx}"
+     data-status="${cls}"
+     data-name="${esc(iter.testCaseName || '')}"
+     onclick="showTest(${idx})">
             <span class="si-num">${iter.iteration +1}</span>
             <div class="si-mid">
                 <span class="si-name">${esc(iter.testCaseName||'Iteration '+iter.iteration+1)}</span>
@@ -533,6 +537,58 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
     border-color:#0969da;
 }
 
+/* ── search box ───────────────────────── */
+.sb-search-wrap{
+    padding:10px;
+    position:relative;
+    border-bottom:1px solid var(--border);
+    background:var(--sb-bg);
+}
+
+.sb-search{
+    width:100%;
+    padding:10px 12px;
+
+    background:var(--bg2);
+    color:var(--text);
+
+    border:1px solid var(--border);
+    border-radius:8px;
+
+    font-size:13px;
+    outline:none;
+
+    transition:.2s;
+}
+
+.sb-search:focus{
+    border-color:#58a6ff;
+    box-shadow:0 0 0 3px rgba(88,166,255,.15);
+}
+
+.sb-search::placeholder{
+    color:var(--text3);
+}
+
+.sb-clear{
+    position:absolute;
+    right:18px;
+    top:50%;
+    transform:translateY(-50%);
+
+    border:none;
+    background:none;
+
+    cursor:pointer;
+
+    color:var(--text3);
+    font-size:14px;
+}
+
+.sb-clear:hover{
+    color:#f85149;
+}
+
 /* ── headers ────────────────────────────────────────── */
 .hdr-row{display:flex;gap:12px;flex-wrap:wrap;}
 .hdr-blk{flex:1;min-width:240px;}
@@ -599,9 +655,29 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
 <div class="layout">
 
     <!-- SIDEBAR -->
-    <div class="sidebar">
-        <!-- filter tabs -->
-        <div class="sb-tabs">
+ <div class="sidebar">
+
+    <!-- Search -->
+    <div class="sb-search-wrap">
+        <input
+            type="text"
+            id="testSearch"
+            class="sb-search"
+            placeholder="🔍 Search test case..."
+            onkeyup="searchTests()"
+        />
+         <button
+        class="sb-clear"
+        onclick="
+            document.getElementById('testSearch').value='';
+            searchTests();
+        ">
+        ✕
+    </button>
+    </div>
+
+    <!-- filter tabs -->
+    <div class="sb-tabs">
             <button class="sb-tab active"    id="tab-all"  onclick="filterSidebar('all')">All<span class="sb-cnt">${total}</span></button>
             <button class="sb-tab tab-pass"  id="tab-pass" onclick="filterSidebar('pass')">Passed<span class="sb-cnt">${passed}</span></button>
             <button class="sb-tab tab-fail"  id="tab-fail" onclick="filterSidebar('fail')">Failed<span class="sb-cnt">${failed}</span></button>
@@ -652,29 +728,75 @@ function toggleTheme() {
 
 // ── sidebar filter ───────────────────────────────────────
 function filterSidebar(filter) {
+
     activeFilter = filter;
-    // update tab button active state
+
     ['all','pass','fail'].forEach(function(f){
-        document.getElementById('tab-'+f).classList.toggle('active', f===filter);
+        document.getElementById('tab-'+f)
+            .classList.toggle('active', f===filter);
     });
-    // show/hide sidebar items
-    var items = document.querySelectorAll('.si');
-    var visible = 0;
-    items.forEach(function(item){
-        var show = filter==='all' || item.getAttribute('data-status')===filter;
-        item.style.display = show ? '' : 'none';
+
+    applySidebarFilters();
+}
+
+function searchTests() {
+    applySidebarFilters();
+}
+
+function applySidebarFilters() {
+
+    const searchText =
+        (document.getElementById('testSearch')?.value || '')
+        .toLowerCase()
+        .trim();
+
+    let visible = 0;
+
+    document.querySelectorAll('.si').forEach(function(item){
+
+        const status =
+            item.getAttribute('data-status');
+
+        const testName =
+            (item.getAttribute('data-name') || '')
+            .toLowerCase();
+
+        const statusMatch =
+            activeFilter === 'all' ||
+            status === activeFilter;
+
+        const searchMatch =
+            searchText === '' ||
+            testName.includes(searchText);
+
+        const show =
+            statusMatch &&
+            searchMatch;
+
+        item.style.display =
+            show ? '' : 'none';
+
         if(show) visible++;
     });
-    // show empty message if none visible
-    var noRes = document.getElementById('no-results');
+
+    let noRes =
+        document.getElementById('no-results');
+
     if(!noRes){
         noRes = document.createElement('div');
         noRes.id = 'no-results';
         noRes.className = 'no-results';
-        noRes.textContent = 'No test cases match this filter';
-        document.getElementById('sb-list').appendChild(noRes);
+        document.getElementById('sb-list')
+            .appendChild(noRes);
     }
-    noRes.style.display = visible===0 ? 'block' : 'none';
+
+    noRes.textContent =
+        searchText
+            ? 'No matching test cases found'
+            : 'No test cases match this filter';
+
+    noRes.style.display =
+        visible === 0 ? 'block' : 'none';
 }
 
 // ── navigation ───────────────────────────────────────────
@@ -687,6 +809,7 @@ function showTest(idx) {
     document.getElementById('ct').scrollTop=0;
     activeIdx=idx;
 }
+
 
 // ── api accordion ────────────────────────────────────────
 function toggleApi(id) {
