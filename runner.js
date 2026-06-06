@@ -30,7 +30,7 @@ const folderName =
 //   5    -> run first 5 rows
 
 const iterationCount =
-    null;
+    10;
 
 // ======================================================
 // SET ARGUMENTS

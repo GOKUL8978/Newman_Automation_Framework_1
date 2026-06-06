@@ -84,9 +84,9 @@ function generateExtentReport(reportFolder, evidenceData, meta) {
         const cls=ok?'pass':'fail';
         return `
         <div class="si ${cls}" id="si-${idx}" data-status="${cls}" onclick="showTest(${idx})">
-            <span class="si-num">${iter.iteration}</span>
+            <span class="si-num">${iter.iteration +1}</span>
             <div class="si-mid">
-                <span class="si-name">${esc(iter.testCaseName||'Iteration '+iter.iteration)}</span>
+                <span class="si-name">${esc(iter.testCaseName||'Iteration '+iter.iteration+1)}</span>
                 ${iter.scenarioType ? `<span class="si-scenario ${iter.scenarioType.toLowerCase()==='positive'?'sc-pos':iter.scenarioType.toLowerCase()==='negative'?'sc-neg':'sc-oth'}">${esc(iter.scenarioType)}</span>` : ''}
             </div>
             <span class="si-res ${cls}">${ok?'PASSED':'FAILED'}</span>
@@ -629,7 +629,7 @@ function highlightJson(raw) {
 
     const out = path.join(reportFolder, 'extent-report.html');
     fs.writeFileSync(out, html, 'utf8');
-    console.log(`📊 Extent Report Generated: ${out}`);
+    // console.log(`📊 Extent Report Generated: ${out}`);
 }
 
 module.exports = generateExtentReport;

@@ -270,7 +270,7 @@ async function generateWordReport(
     fs.writeFileSync(outputFile, buffer);
 
     console.log(
-        `📄 Word Evidence Generated: ${outputFile}`
+        `Word Evidence Generated: ${outputFile}`
     );
 }
 

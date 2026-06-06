@@ -60,11 +60,11 @@ const testScenarioTypeColumn =
     (framework.testScenarioTypeColumn || '')
         .trim();
 
-console.log('\n📋 Framework Configuration');
-console.log(`   Evidence Format:          ${evidenceFormat.toUpperCase()}`);
-console.log(`   Copy Test Data:           ${copyTestDataToReports}`);
-console.log(`   Test Case Name Column:    ${testCaseNameColumn}`);
-console.log(`   Scenario Type Column:     ${testScenarioTypeColumn || '(not set)'}`);
+// console.log('\n📋 Framework Configuration');
+// console.log(`   Evidence Format:          ${evidenceFormat.toUpperCase()}`);
+// console.log(`   Copy Test Data:           ${copyTestDataToReports}`);
+// console.log(`   Test Case Name Column:    ${testCaseNameColumn}`);
+// console.log(`   Scenario Type Column:     ${testScenarioTypeColumn || '(not set)'}`);
 
 // ======================================================
 // INPUTS FROM runner.js
@@ -301,7 +301,7 @@ async function main() {
     }
 
     console.log(
-        `\n📦 Collection loaded: "${liveCollection.info?.name || collectionOutputPath}"` +
+        // `\n📦 Collection loaded: "${liveCollection.info?.name || collectionOutputPath}"` 
         `\n🚀 Starting test run: ${targetFolder || 'ROOT'}`
     );
 
@@ -344,12 +344,12 @@ async function main() {
             Number(iterationCount);
 
         console.log(
-            `🔁 Running ${iterationCount} iterations`
+            `Running ${iterationCount} iterations`
         );
 
     } else {
 
-        console.log('🔁 Running ALL iterations');
+        console.log('Running ALL iterations');
     }
 
     // folder filter
@@ -394,7 +394,7 @@ async function main() {
 
             newmanOptions.iterationData = inputFile;
 
-            console.log(`📄 Using CSV File: ${inputFile}`);
+            console.log(`Using CSV File: ${inputFile}`);
         }
 
     } else {
@@ -720,9 +720,9 @@ async function main() {
             }
         );
 
-        console.log('\n🎉 Execution Completed');
-        console.log(`📁 Extent Report:  ${reportFolder}/extent-report.html`);
-        console.log(`📁 HTML Report:    ${reportFolder}/report.html`);
+        console.log('\n Execution Completed....');
+        console.log(`Report:  ${reportFolder}/extent-report.html`);
+        // console.log(`📁 HTML Report:    ${reportFolder}/report.html`);
     });
 }
 
@@ -791,9 +791,9 @@ function updateDataFile(
 
                 fs.copyFileSync(filePath, dest);
 
-                console.log(
-                    `📂 Test data copied to reports: ${path.basename(filePath)}`
-                );
+                // console.log(
+                //     `📂 Test data copied to reports: ${path.basename(filePath)}`
+                // );
 
             } else {
 
@@ -838,7 +838,7 @@ function updateDataFile(
 
                 fs.writeFileSync(filePath, updatedCsv);
 
-                console.log(`📄 Updated CSV: ${filePath}`);
+                console.log(`Updated CSV: ${filePath}`);
 
                 // copy to reports
                 if (copyTestDataToReports) {
@@ -851,9 +851,9 @@ function updateDataFile(
 
                     fs.copyFileSync(filePath, dest);
 
-                    console.log(
-                        `📂 Test data copied to reports: ${path.basename(filePath)}`
-                    );
+                    // console.log(
+                    //     `📂 Test data copied to reports: ${path.basename(filePath)}`
+                    // );
 
                 } else {
 
