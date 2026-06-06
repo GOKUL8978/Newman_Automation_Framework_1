@@ -1,0 +1,12 @@
+Create_User:
+  userId: "data.id"
+  userName: "data.name"
+
+Get_User:
+  customerId: "data.customer.id"
+
+Orders_API:
+  orderId: "data.orders[0].id"
+
+# Set null to skip field extraction for this API
+Skip_API: null
