@@ -1,5 +1,5 @@
-name,email,host,age,testResult,responseStatusCode,rawRequestBody,rawResponseBody,requestBody,responseBody
-Gokul,gokul@test.com,gokul@test.com,25,PASSED,200,"{
+name,TestCaseName,Scenario,email,host,age,testResult,responseStatusCode,rawRequestBody,rawResponseBody,requestBody,responseBody
+Gokul,TestCase_1,Positive,gokul@test.com,gokul@test.com,25,PASSED,200,"{
   ""name"": ""Gokul"",
   ""email"": ""gokul@test.com"",
   ""age"": 25
@@ -7,8 +7,8 @@ Gokul,gokul@test.com,gokul@test.com,25,PASSED,200,"{
   ""name"": ""Gokul"",
   ""email"": ""gokul@test.com"",
   ""age"": 25
-}","{""args"":{},""data"":{""name"":""Gokul"",""email"":""gokul@test.com"",""age"":25},""files"":{},""form"":{},""headers"":{""host"":""postman-echo.com"",""user-agent"":""PostmanRuntime/7.39.1"",""accept"":""*/*"",""accept-encoding"":""gzip, br"",""postman-token"":""0ac7ae67-eccd-4010-a596-1ca48bd52b1d"",""x-forwarded-proto"":""https"",""cache-control"":""no-cache"",""content-length"":""63"",""content-type"":""application/json""},""json"":{""name"":""Gokul"",""email"":""gokul@test.com"",""age"":25},""url"":""https://postman-echo.com/post""}"
-Arun,arun@test.com,arun@test.com,30,PASSED,200,"{
+}","{""args"":{},""data"":{""name"":""Gokul"",""email"":""gokul@test.com"",""age"":25},""files"":{},""form"":{},""headers"":{""host"":""postman-echo.com"",""user-agent"":""PostmanRuntime/7.39.1"",""accept"":""*/*"",""accept-encoding"":""gzip, br"",""postman-token"":""00e24144-aedc-4060-ad44-b04ff6ee65d9"",""x-forwarded-proto"":""https"",""cache-control"":""no-cache"",""content-length"":""63"",""content-type"":""application/json""},""json"":{""name"":""Gokul"",""email"":""gokul@test.com"",""age"":25},""url"":""https://postman-echo.com/post""}"
+Arun,TestCase_2,Positive,arun@test.com,arun@test.com,30,PASSED,200,"{
   ""name"": ""Arun"",
   ""email"": ""arun@test.com"",
   ""age"": 30
@@ -16,8 +16,8 @@ Arun,arun@test.com,arun@test.com,30,PASSED,200,"{
   ""name"": ""Arun"",
   ""email"": ""arun@test.com"",
   ""age"": 30
-}","{""args"":{},""data"":{""name"":""Arun"",""email"":""arun@test.com"",""age"":30},""files"":{},""form"":{},""headers"":{""host"":""postman-echo.com"",""accept"":""*/*"",""cache-control"":""no-cache"",""accept-encoding"":""gzip, br"",""x-forwarded-proto"":""https"",""postman-token"":""796cec4e-055f-40f9-8235-5d020edf9869"",""content-length"":""61"",""content-type"":""application/json"",""user-agent"":""PostmanRuntime/7.39.1"",""cookie"":""sails.sid=s%3A49S75hTOm9xqjTnNJiQbEVJlBCKwrH1I.Kktub0CtriBrC6WNpWpXp0wUjKdUICOZnAwz7HCHA5s; __cf_bm=Nb3_Bfs31kJxsEHEPAiyPvFitx8DmaEaDYiYuT2gugo-1780719561.2683525-1.0.1.1-UNY9JTnuIXIa_lqpMgRLTqazbGbrGLu64JxFJOwb4iI3cXPG38DO9u0fVWsZ_Pib5XafDmOgV_H3xvPhkXsGMjtfekGOg77dwrpeYhln5P9kJTKJhkFGVisLEGYecbvJ; _cfuvid=wsGPDBmMTrR0ptnR_.WMBkFXKTs4nwrohiRCxVuPiiY-1780719561.2683525-1.0.1.1-ZAE5BOvCcC8odNM08b.FRFhd6Mhtwh2MShKVKvhPHj4""},""json"":{""name"":""Arun"",""email"":""arun@test.com"",""age"":30},""url"":""https://postman-echo.com/post""}"
-Priya,priya@test.com,priya@test.com,28,PASSED,200,"{
+}","{""args"":{},""data"":{""name"":""Arun"",""email"":""arun@test.com"",""age"":30},""files"":{},""form"":{},""headers"":{""host"":""postman-echo.com"",""accept"":""*/*"",""cache-control"":""no-cache"",""accept-encoding"":""gzip, br"",""x-forwarded-proto"":""https"",""postman-token"":""7a7deee9-7cb9-4f6b-9466-3beeea9b596d"",""content-length"":""61"",""content-type"":""application/json"",""user-agent"":""PostmanRuntime/7.39.1"",""cookie"":""sails.sid=s%3A6opB7DSiDwJTkHDaTEATdpNcGqqZb8M8.q%2Bzae11bDt%2F4hwE1z%2FySp7GPhkL3DJtOX9OcGrFfNkw; __cf_bm=HFFmYf6Z28Qzposxvf5d26INmG2axr1qjfaT.Cp7a64-1780731360.1579835-1.0.1.1-NZsXPRI9abEoxkNKqdy6lIutoTb1CXMNectz2cY3rgW3UpQCvQxNhk7NkBYKIud7f2RS5PywzlvIbCXByy2Nfn.5K6ueFApeGG_Q7tD2nI4H.K4mCdddizHVRZYM0uWM; _cfuvid=D0CHkI7gvVWBs35dBv0uIkAKQRHkWPwjrIQg0I7QCJM-1780731360.1579835-1.0.1.1-t6hF.T5sXOW2KKM0StWau7N2zaVhz2Mt6LXnCydF3dE""},""json"":{""name"":""Arun"",""email"":""arun@test.com"",""age"":30},""url"":""https://postman-echo.com/post""}"
+Priya,TestCase_2,Negative,priya@test.com,priya@test.com,28,PASSED,200,"{
   ""name"": ""Priya"",
   ""email"": ""priya@test.com"",
   ""age"": 28
@@ -25,4 +25,4 @@ Priya,priya@test.com,priya@test.com,28,PASSED,200,"{
   ""name"": ""Priya"",
   ""email"": ""priya@test.com"",
   ""age"": 28
-}","{""args"":{},""data"":{""name"":""Priya"",""email"":""priya@test.com"",""age"":28},""files"":{},""form"":{},""headers"":{""host"":""postman-echo.com"",""accept"":""*/*"",""cache-control"":""no-cache"",""accept-encoding"":""gzip, br"",""x-forwarded-proto"":""https"",""postman-token"":""08d19299-23b7-467a-8961-3fd78bd67b43"",""content-length"":""63"",""content-type"":""application/json"",""user-agent"":""PostmanRuntime/7.39.1"",""cookie"":""sails.sid=s%3AsKTO5qCVcMVh2rZM_1xPwx9RyIXYs6gv.qEhYksmfN7kRpCbyXsK4MDarVSwNgCeXMr6A5gYGJHk; __cf_bm=Nb3_Bfs31kJxsEHEPAiyPvFitx8DmaEaDYiYuT2gugo-1780719561.2683525-1.0.1.1-UNY9JTnuIXIa_lqpMgRLTqazbGbrGLu64JxFJOwb4iI3cXPG38DO9u0fVWsZ_Pib5XafDmOgV_H3xvPhkXsGMjtfekGOg77dwrpeYhln5P9kJTKJhkFGVisLEGYecbvJ; _cfuvid=wsGPDBmMTrR0ptnR_.WMBkFXKTs4nwrohiRCxVuPiiY-1780719561.2683525-1.0.1.1-ZAE5BOvCcC8odNM08b.FRFhd6Mhtwh2MShKVKvhPHj4""},""json"":{""name"":""Priya"",""email"":""priya@test.com"",""age"":28},""url"":""https://postman-echo.com/post""}"
+}","{""args"":{},""data"":{""name"":""Priya"",""email"":""priya@test.com"",""age"":28},""files"":{},""form"":{},""headers"":{""host"":""postman-echo.com"",""accept"":""*/*"",""cache-control"":""no-cache"",""accept-encoding"":""gzip, br"",""x-forwarded-proto"":""https"",""postman-token"":""f7340842-eef9-4423-bbd9-99cd0e130f19"",""content-length"":""63"",""content-type"":""application/json"",""user-agent"":""PostmanRuntime/7.39.1"",""cookie"":""sails.sid=s%3AAxKEwBpSfoBIlNnbGD2p8QWNXLQICPEY.r35zPvgCyAJl4zY1rExYRQ5aGeA914FM5il1DuxdHBM; __cf_bm=HFFmYf6Z28Qzposxvf5d26INmG2axr1qjfaT.Cp7a64-1780731360.1579835-1.0.1.1-NZsXPRI9abEoxkNKqdy6lIutoTb1CXMNectz2cY3rgW3UpQCvQxNhk7NkBYKIud7f2RS5PywzlvIbCXByy2Nfn.5K6ueFApeGG_Q7tD2nI4H.K4mCdddizHVRZYM0uWM; _cfuvid=D0CHkI7gvVWBs35dBv0uIkAKQRHkWPwjrIQg0I7QCJM-1780731360.1579835-1.0.1.1-t6hF.T5sXOW2KKM0StWau7N2zaVhz2Mt6LXnCydF3dE""},""json"":{""name"":""Priya"",""email"":""priya@test.com"",""age"":28},""url"":""https://postman-echo.com/post""}"

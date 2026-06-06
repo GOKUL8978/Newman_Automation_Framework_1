@@ -1,3 +1,12 @@
+// ======================================
+// scripts/utils.js
+// ======================================
+
+/**
+ * Extracts a value from a nested object
+ * using a dot-path string.
+ * Supports array indexing: "data.orders[0].id"
+ */
 function getValueFromPath(obj, jsonPath) {
 
     try {
@@ -17,6 +26,15 @@ function getValueFromPath(obj, jsonPath) {
     }
 }
 
+/**
+ * Normalises a folderMapping entry.
+ *
+ * Accepts both:
+ *   "Create_User": "./data/data.csv"
+ *   "Orders_API":  { file: "...", worksheet: "Sheet1" }
+ *
+ * Always returns { file, worksheet }.
+ */
 function getFileConfig(folderCsvMap, folderName) {
 
     const config =

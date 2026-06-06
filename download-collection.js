@@ -35,14 +35,14 @@ const path  = require('path');
 
 const POSTMAN_API_KEY =
     process.env.POSTMAN_API_KEY ||
-    '';
+    'YOUR_POSTMAN_API_KEY_HERE';
 
 // Get your API key:
 // Postman → top-right avatar → Settings → API Keys → Generate API Key
 
 const POSTMAN_COLLECTION_ID =
     process.env.POSTMAN_COLLECTION_ID ||
-    '';
+    'YOUR_COLLECTION_ID_HERE';
 
 // Get your Collection ID:
 // Postman → right-click your collection → Info → ID field

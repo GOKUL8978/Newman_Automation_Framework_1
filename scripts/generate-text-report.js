@@ -1,40 +1,46 @@
-// ======================================
+// ======================================================
 // scripts/generate-text-report.js
 //
-// Generates a single .txt evidence file
-// containing all iterations.
-// Each iteration includes all APIs that
-// ran in that iteration.
-// ======================================
+// Generates a single .txt evidence file containing
+// all iterations.
+// Multiple APIs within one iteration are included
+// sequentially under the same iteration block.
+// ======================================================
 
 const fs   = require('fs');
 const path = require('path');
 
 /**
- * Generates a single text evidence file.
+ * @param {string} reportFolder
+ * @param {Array}  evidenceData
  *
- * @param {string} reportFolder  - Output folder path
- * @param {Array}  evidenceData  - Array of evidence entries.
- *
- * Each entry is:
- * {
- *   iteration:    number,
- *   testCaseName: string,
- *   apis: [
- *     {
- *       apiName:      string,
- *       statusCode:   number|string,
- *       requestBody:  string,
- *       responseBody: string,
- *       result:       'PASSED' | 'FAILED'
- *     }
- *   ]
- * }
+ * evidenceData shape:
+ * [
+ *   {
+ *     iteration:    number,
+ *     testCaseName: string,
+ *     apis: [
+ *       {
+ *         apiName:      string,
+ *         statusCode:   string|number,
+ *         requestBody:  string,
+ *         responseBody: string,
+ *         result:       'PASSED'|'FAILED'
+ *       }
+ *     ]
+ *   }
+ * ]
  */
-function generateTextReport(reportFolder, evidenceData) {
+function generateTextReport(
+    reportFolder,
+    evidenceData
+) {
 
-    if (!evidenceData || evidenceData.length === 0) {
-        console.log('⚠️  No evidence data available for text report');
+    if (
+        !evidenceData ||
+        evidenceData.length === 0
+    ) {
+        console.log('⚠️  No evidence data for text report');
         return;
     }
 
@@ -43,22 +49,18 @@ function generateTextReport(reportFolder, evidenceData) {
 
     let content = '';
 
-    evidenceData.forEach((iterItem, iterIndex) => {
+    evidenceData.forEach(iterItem => {
 
-        // ======================================
-        // ITERATION HEADER
-        // ======================================
+        // ── iteration header ────────────────────────────
 
         content += `${LINE_DOUBLE}\n`;
         content += `ITERATION: ${iterItem.iteration}\n`;
         content += `${LINE_DOUBLE}\n\n`;
 
-        // TEST CASE NAME
         content += `TEST CASE NAME\n`;
         content += `${LINE_SINGLE}\n`;
         content += `${iterItem.testCaseName || `Iteration ${iterItem.iteration}`}\n\n`;
 
-        // OVERALL RESULT
         const overallResult =
             iterItem.apis.some(a => a.result === 'FAILED')
                 ? 'FAILED'
@@ -68,14 +70,12 @@ function generateTextReport(reportFolder, evidenceData) {
         content += `${LINE_SINGLE}\n`;
         content += `${overallResult}\n\n`;
 
-        // ======================================
-        // ONE BLOCK PER API
-        // ======================================
+        // ── one block per API ───────────────────────────
 
-        iterItem.apis.forEach((api, apiIndex) => {
+        iterItem.apis.forEach((api, apiIdx) => {
 
             content += `${LINE_SINGLE}\n`;
-            content += `API #${apiIndex + 1}: ${api.apiName || 'Unknown'}\n`;
+            content += `API #${apiIdx + 1}: ${api.apiName || 'Unknown'}\n`;
             content += `${LINE_SINGLE}\n\n`;
 
             content += `API NAME\n`;
@@ -99,15 +99,19 @@ function generateTextReport(reportFolder, evidenceData) {
         content += `${LINE_DOUBLE}\n\n\n`;
     });
 
-    // ======================================
-    // WRITE TO SINGLE FILE
-    // ======================================
+    // ── write single file ───────────────────────────────
 
-    const outputFile = path.join(reportFolder, 'ExecutionEvidence.txt');
+    const outputFile =
+        path.join(
+            reportFolder,
+            'ExecutionEvidence.txt'
+        );
 
     fs.writeFileSync(outputFile, content, 'utf8');
 
-    console.log(`📄 Text Evidence Generated: ${outputFile}`);
+    console.log(
+        `📄 Text Evidence Generated: ${outputFile}`
+    );
 }
 
 module.exports = generateTextReport;

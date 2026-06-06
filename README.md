@@ -1,16 +1,4 @@
-# Newman Automation Framework — Enhanced v2.0
-
-## What's New
-
-| Feature | How to configure |
-|---|---|
-| **Evidence format: DOCX or TXT** | `evidenceFormat=docx` or `evidenceFormat=txt` in `framework.properties` |
-| **Copy test data to reports** | `copyTestDataToReports=true` or `false` |
-| **Custom test case name column** | `testCaseNameColumn=yourColumnName` |
-| **Multiple APIs per iteration** | Works automatically — all APIs in an iteration are captured |
-| **Live Postman API fetch** | `collectionSource=postman` — no more manual JSON exports |
-
----
+# Newman Automation Framework v2
 
 ## Setup
 
@@ -20,36 +8,68 @@ npm install
 
 ---
 
-## framework.properties — All Options
+## How It Works
+
+Every `npm test` follows this exact sequence:
+
+```
+1. Load base collection   (collection path from framework.properties)
+        ↓
+2. Run "collection_json_api" folder silently
+   → Response body saved as live-collection.json
+   → NOT shown in HTML report
+        ↓
+3. Run target folder from live-collection.json
+   → HTML report
+   → Evidence (docx or txt)
+   → Update CSV/Excel data file
+   → Optionally copy data file to report folder
+```
+
+---
+
+## Postman Setup — collection_json_api
+
+You **must** have a folder named exactly **`collection_json_api`** in your
+Postman collection. It should contain one GET request that calls the Postman
+API and returns your collection JSON:
+
+```
+GET https://api.getpostman.com/collections/{{collectionId}}
+Header: X-Api-Key: {{postmanApiKey}}
+```
+
+Set `collectionId` and `postmanApiKey` as Postman environment variables (or
+hardcode them in the request). The response body is the live collection JSON —
+the framework saves it and runs your tests from it. You never need to export
+the collection JSON manually again.
+
+The `collection_json_api` folder is excluded from the HTML report automatically.
+
+---
+
+## framework.properties
 
 ```properties
-# ─── COLLECTION SOURCE ──────────────────────────────────
-# 'file'    → load from local JSON (default)
-# 'postman' → fetch live from Postman API (no export needed)
-collectionSource=file
-
+# Base collection JSON file (must contain collection_json_api folder)
 collection=./collection/new-collection.json
 
-# Only needed when collectionSource=postman:
-postmanApiKey=YOUR_POSTMAN_API_KEY_HERE
-postmanCollectionId=YOUR_COLLECTION_UID_HERE
+# Where the live collection is saved before each run
+collectionOutputPath=./collection/live-collection.json
 
-# ─── MAPPING ────────────────────────────────────────────
-mappingType=json   # or yaml
+# Mapping file format: json or yaml
+mappingType=json
 
-# ─── EVIDENCE ───────────────────────────────────────────
-# 'docx' → one Word page per iteration, all APIs on same page
-# 'txt'  → single .txt file with all iterations
+# Evidence format: docx or txt
 evidenceFormat=docx
 
-# ─── TEST DATA ──────────────────────────────────────────
-# Copy the CSV/Excel data file into the report folder?
+# Copy CSV/Excel data file to report folder after each run
 copyTestDataToReports=true
 
-# Column name in your data file that holds the test case name
+# Column name in CSV/Excel that holds the test case name
 testCaseNameColumn=testCaseName
 
-# ─── SSL ────────────────────────────────────────────────
+# SSL (optional)
 sslEnabled=false
 sslCert=./certs/client-cert.pem
 sslKey=./certs/client-key.pem
@@ -58,90 +78,86 @@ sslPassphrase=password123
 
 ---
 
-## Running Tests
+## runner.js
 
-```bash
-# Using runner.js (edit folderName / iterationCount inside the file)
-npm test
-
-# Or directly:
-node runner.js
+```js
+const folderName     = 'Create_User';  // Postman folder name, or null for ROOT
+const iterationCount = null;           // null = all rows, number = first N rows
 ```
+
+---
+
+## folderMapping.json — Map Folders to Data Files
+
+```json
+{
+  "Create_User": "./data/data.csv",
+  "Orders_API": {
+    "file": "./data/orders.xlsx",
+    "worksheet": "Orders"
+  }
+}
+```
+
+Both CSV and Excel (with optional worksheet) are supported.
+
+---
+
+## csv_update.json — Extract Response Fields into Data File
+
+```json
+{
+  "Creating_Users": {
+    "host": "data.email"
+  },
+  "Get_User": {
+    "userId": "data.id",
+    "userName": "data.name"
+  }
+}
+```
+
+Each key is the **request name** in Postman. The value maps **column names** to
+**JSON paths** in the response. Supports dot-paths and array indexing
+(`data.orders[0].id`). Set a mapping to `null` to skip that API.
 
 ---
 
 ## Evidence Reports
 
-### DOCX Format (`evidenceFormat=docx`)
+### DOCX (`evidenceFormat=docx`)
 
-Each **iteration** gets its own full page. If you have multiple APIs in one
-iteration they all appear on the same page, separated by a divider:
+One full Word page per iteration. Multiple APIs per iteration appear on the
+same page separated by a divider. Page breaks between iterations.
 
 ```
-┌──────────────────────────────────────────┐
-│  API EXECUTION EVIDENCE                  │
-│                                          │
-│  TEST CASE NAME:  Happy path - new user  │
-│  ITERATION:       0                      │
-│  OVERALL RESULT:  PASSED                 │
-│                                          │
-│  ── API #1: Create_User ──               │
-│  STATUS CODE:     200                    │
-│  TEST RESULT:     PASSED                 │
-│  REQUEST BODY:    { "name": "Gokul" }    │
-│  RESPONSE BODY:   { "data": {...} }      │
-│                                          │
-│  ── API #2: Verify_User ──               │
-│  STATUS CODE:     200                    │
-│  TEST RESULT:     PASSED                 │
-│  ...                                     │
-└──────────────────────────────────────────┘
-PAGE BREAK
-┌──────────────────────────────────────────┐
-│  (Iteration 1 on next page)              │
-└──────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  API EXECUTION EVIDENCE                      │
+│  TEST CASE NAME:   TC001 - Create valid user │
+│  ITERATION:        0                         │
+│  OVERALL RESULT:   PASSED                    │
+│                                              │
+│  ── API #1: Creating_Users ──                │
+│  STATUS CODE:      200                       │
+│  TEST RESULT:      PASSED                    │
+│  REQUEST BODY:     { "name": "Gokul" ... }   │
+│  RESPONSE BODY:    { "data": { ... } }       │
+└─────────────────────────────────────────────┘
+         ← PAGE BREAK →
+┌─────────────────────────────────────────────┐
+│  (Iteration 1 here)                          │
+└─────────────────────────────────────────────┘
 ```
 
-### TXT Format (`evidenceFormat=txt`)
+### TXT (`evidenceFormat=txt`)
 
-A **single `ExecutionEvidence.txt`** file with all iterations, each separated by
-`=` dividers. All APIs per iteration appear in sequence.
-
----
-
-## Live Postman API Fetch (No Export!)
-
-Set in `framework.properties`:
-
-```properties
-collectionSource=postman
-postmanApiKey=PMAK-xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx
-postmanCollectionId=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-```
-
-**Getting your API key:**
-1. Open Postman → top-right avatar → Settings
-2. Go to **API Keys** tab
-3. Click **Generate API Key**
-
-**Getting your Collection ID:**
-1. In Postman, right-click your collection → **Info**
-2. Copy the **ID** (looks like: `12345678-abcd-1234-efgh-...`)
-
-Every `npm test` will fetch the **latest saved version** of your collection
-directly from Postman — no JSON export step needed.
+Single `ExecutionEvidence.txt` file containing all iterations.
 
 ---
 
 ## Test Case Name Column
 
-Add a column to your CSV/Excel (e.g. `testCaseName`) and set:
-
-```properties
-testCaseNameColumn=testCaseName
-```
-
-Example CSV:
+Add a column (e.g. `testCaseName`) to your CSV/Excel:
 
 ```csv
 testCaseName,name,email,age
@@ -149,8 +165,17 @@ testCaseName,name,email,age
 "TC002 - Create another user",Arun,arun@test.com,30
 ```
 
-The test case name from each row appears in the evidence report for that
-iteration.
+Set `testCaseNameColumn=testCaseName` in `framework.properties`.
+
+---
+
+## npm Scripts
+
+```bash
+npm test       # Run tests (uses runner.js)
+npm run clear  # Delete all report folders
+npm run convert  # Convert Excel files in csv-converter/ to csv files/
+```
 
 ---
 
@@ -159,12 +184,26 @@ iteration.
 ```
 reports/
 └── Create_User_2026-06-04T10-30-00-000Z/
-    ├── report.html              ← HTML report (htmlextra)
-    ├── ExecutionEvidence.docx   ← Word evidence (if evidenceFormat=docx)
-    ├── ExecutionEvidence.txt    ← Text evidence  (if evidenceFormat=txt)
-    ├── data.csv                 ← Test data copy (if copyTestDataToReports=true)
+    ├── report.html              ← HTML report (collection_json_api excluded)
+    ├── ExecutionEvidence.docx   ← Word evidence (evidenceFormat=docx)
+    ├── ExecutionEvidence.txt    ← Text evidence  (evidenceFormat=txt)
+    ├── data.csv                 ← Test data copy (copyTestDataToReports=true)
     └── evidence/
         ├── Creating_Users_iter0.txt
         ├── Creating_Users_iter1.txt
         └── ...
+
+collection/
+    ├── new-collection.json      ← Your base collection (commit this)
+    └── live-collection.json     ← Auto-generated before each run (gitignore this)
+```
+
+---
+
+## .gitignore Recommendation
+
+```
+node_modules/
+reports/
+collection/live-collection.json
 ```

@@ -1,12 +1,14 @@
-// ======================================
+// ======================================================
 // scripts/generate-word-report.js
 //
 // Generates a Word (.docx) evidence report.
-// Each iteration = one full page.
-// Multiple APIs per iteration are all
-// included on the same page, separated
-// by a horizontal divider.
-// ======================================
+//
+// Layout:
+//   • One full page per iteration
+//   • Page break between iterations
+//   • Multiple APIs in one iteration appear on the
+//     same page, separated by a horizontal rule
+// ======================================================
 
 const fs   = require('fs');
 const path = require('path');
@@ -18,19 +20,13 @@ const {
     TextRun,
     HeadingLevel,
     PageBreak,
-    BorderStyle,
-    Table,
-    TableRow,
-    TableCell,
-    WidthType,
-    AlignmentType
+    BorderStyle
 } = require('docx');
 
-// ======================================
-// HELPER: Bold label paragraph
-// ======================================
+// ── helpers ────────────────────────────────────────────
 
 function boldLabel(text) {
+
     return new Paragraph({
         children: [
             new TextRun({
@@ -43,11 +39,8 @@ function boldLabel(text) {
     });
 }
 
-// ======================================
-// HELPER: Normal value paragraph
-// ======================================
-
 function valueText(text) {
+
     return new Paragraph({
         children: [
             new TextRun({
@@ -59,96 +52,106 @@ function valueText(text) {
     });
 }
 
-// ======================================
-// HELPER: Monospace body paragraph
-// (for request/response JSON)
-// ======================================
+function resultText(result) {
 
-function monoText(text) {
-    const safeText = String(text || '');
-    // Split on newlines to preserve formatting
-    const lines = safeText.split('\n');
-    return lines.map(line =>
-        new Paragraph({
-            children: [
-                new TextRun({
-                    text: line,
-                    font: 'Courier New',
-                    size: 18
-                })
-            ],
-            spacing: { after: 0 }
-        })
-    );
+    const isPass =
+        result === 'PASSED';
+
+    return new Paragraph({
+        children: [
+            new TextRun({
+                text:  result || '',
+                bold:  true,
+                color: isPass ? '006400' : 'CC0000',
+                size:  22
+            })
+        ],
+        spacing: { after: 80 }
+    });
 }
 
-// ======================================
-// HELPER: Divider between APIs
-// within the same iteration
-// ======================================
+function monoLines(text) {
 
-function divider() {
+    return String(text || '(empty)')
+        .split('\n')
+        .map(line =>
+            new Paragraph({
+                children: [
+                    new TextRun({
+                        text: line,
+                        font: 'Courier New',
+                        size: 18
+                    })
+                ],
+                spacing: { after: 0 }
+            })
+        );
+}
+
+function ruleDivider() {
+
     return new Paragraph({
         border: {
             bottom: {
                 color: 'AAAAAA',
                 space: 1,
                 style: BorderStyle.SINGLE,
-                size: 6
+                size:  6
             }
         },
         spacing: { before: 200, after: 200 }
     });
 }
 
-// ======================================
-// HELPER: Section heading
-// ======================================
+function apiHeading(text) {
 
-function sectionHeading(text) {
     return new Paragraph({
         heading: HeadingLevel.HEADING_2,
         children: [
             new TextRun({
                 text,
-                bold: true,
+                bold:  true,
                 color: '2E4057',
-                size: 24
+                size:  24
             })
         ],
         spacing: { before: 240, after: 120 }
     });
 }
 
-// ======================================
-// MAIN EXPORT
-// ======================================
+// ── main export ────────────────────────────────────────
 
 /**
- * Generates Word evidence report.
+ * @param {string} reportFolder
+ * @param {Array}  evidenceData
  *
- * @param {string} reportFolder  - Output folder path
- * @param {Array}  evidenceData  - Array of evidence entries.
- *
- * Each entry is:
- * {
- *   iteration:    number,
- *   testCaseName: string,
- *   apis: [
- *     {
- *       apiName:      string,
- *       statusCode:   number|string,
- *       requestBody:  string,
- *       responseBody: string,
- *       result:       'PASSED' | 'FAILED'
- *     }
- *   ]
- * }
+ * evidenceData shape:
+ * [
+ *   {
+ *     iteration:    number,
+ *     testCaseName: string,
+ *     apis: [
+ *       {
+ *         apiName:      string,
+ *         statusCode:   string|number,
+ *         requestBody:  string,
+ *         responseBody: string,
+ *         result:       'PASSED'|'FAILED'
+ *       }
+ *     ]
+ *   }
+ * ]
  */
-async function generateWordReport(reportFolder, evidenceData) {
+async function generateWordReport(
+    reportFolder,
+    evidenceData
+) {
 
-    if (!evidenceData || evidenceData.length === 0) {
-        console.log('⚠️  No evidence data available for Word report');
+    if (
+        !evidenceData ||
+        evidenceData.length === 0
+    ) {
+        console.log('⚠️  No evidence data for Word report');
         return;
     }
 
@@ -156,10 +159,7 @@ async function generateWordReport(reportFolder, evidenceData) {
 
     evidenceData.forEach((iterItem, iterIndex) => {
 
-        // ======================================
-        // PAGE BREAK between iterations
-        // (not before the first page)
-        // ======================================
+        // ── page break between iterations ──────────────
 
         if (iterIndex > 0) {
             children.push(
@@ -169,41 +169,24 @@ async function generateWordReport(reportFolder, evidenceData) {
             );
         }
 
-        // ======================================
-        // PAGE TITLE
-        // ======================================
+        // ── page title ──────────────────────────────────
 
         children.push(
             new Paragraph({
                 heading: HeadingLevel.HEADING_1,
                 children: [
                     new TextRun({
-                        text: 'API EXECUTION EVIDENCE',
-                        bold: true,
+                        text:  'API EXECUTION EVIDENCE',
+                        bold:  true,
                         color: '1A1A2E',
-                        size: 32
+                        size:  32
                     })
                 ],
                 spacing: { after: 200 }
             })
         );
 
-        // ======================================
-        // ITERATION & TEST CASE SUMMARY
-        // ======================================
-
-        children.push(
-            boldLabel('TEST CASE NAME'),
-            valueText(iterItem.testCaseName || `Iteration ${iterItem.iteration}`),
-
-            boldLabel('ITERATION'),
-            valueText(String(iterItem.iteration))
-        );
-
-        // ======================================
-        // OVERALL RESULT
-        // Derive from APIs: FAILED if any failed
-        // ======================================
+        // ── iteration summary ───────────────────────────
 
         const overallResult =
             iterItem.apis.some(a => a.result === 'FAILED')
@@ -211,79 +194,51 @@ async function generateWordReport(reportFolder, evidenceData) {
                 : 'PASSED';
 
         children.push(
+            boldLabel('TEST CASE NAME'),
+            valueText(
+                iterItem.testCaseName ||
+                `Iteration ${iterItem.iteration}`
+            ),
+
+            boldLabel('ITERATION'),
+            valueText(String(iterItem.iteration)),
+
             boldLabel('OVERALL RESULT'),
-            new Paragraph({
-                children: [
-                    new TextRun({
-                        text: overallResult,
-                        bold: true,
-                        color: overallResult === 'PASSED' ? '006400' : 'CC0000',
-                        size: 22
-                    })
-                ],
-                spacing: { after: 200 }
-            })
+            resultText(overallResult)
         );
 
-        // ======================================
-        // ONE BLOCK PER API
-        // ======================================
+        // ── one block per API ───────────────────────────
 
-        iterItem.apis.forEach((api, apiIndex) => {
+        iterItem.apis.forEach((api, apiIdx) => {
 
-            if (apiIndex > 0) {
-                children.push(divider());
+            if (apiIdx > 0) {
+                children.push(ruleDivider());
             }
 
             children.push(
-                sectionHeading(`API #${apiIndex + 1}: ${api.apiName || 'Unknown'}`)
-            );
+                apiHeading(
+                    `API #${apiIdx + 1}: ${api.apiName || 'Unknown'}`
+                ),
 
-            // API Name
-            children.push(
                 boldLabel('API NAME'),
-                valueText(api.apiName || '')
-            );
+                valueText(api.apiName || ''),
 
-            // Status Code
-            children.push(
                 boldLabel('RESPONSE STATUS CODE'),
-                valueText(String(api.statusCode || ''))
-            );
+                valueText(String(api.statusCode || '')),
 
-            // Result
-            children.push(
                 boldLabel('TEST RESULT'),
-                new Paragraph({
-                    children: [
-                        new TextRun({
-                            text: api.result || '',
-                            bold: true,
-                            color: api.result === 'PASSED' ? '006400' : 'CC0000',
-                            size: 22
-                        })
-                    ],
-                    spacing: { after: 80 }
-                })
-            );
+                resultText(api.result || 'UNKNOWN'),
 
-            // Raw Request Body
-            children.push(
                 boldLabel('RAW REQUEST BODY'),
-                ...monoText(api.requestBody || '(empty)')
-            );
+                ...monoLines(api.requestBody),
 
-            // Raw Response Body
-            children.push(
                 boldLabel('RAW RESPONSE BODY'),
-                ...monoText(api.responseBody || '(empty)')
+                ...monoLines(api.responseBody)
             );
         });
     });
 
-    // ======================================
-    // BUILD DOCUMENT
-    // ======================================
+    // ── build document ──────────────────────────────────
 
     const doc = new Document({
         sections: [
@@ -303,13 +258,20 @@ async function generateWordReport(reportFolder, evidenceData) {
         ]
     });
 
-    const buffer = await Packer.toBuffer(doc);
+    const buffer =
+        await Packer.toBuffer(doc);
 
-    const outputFile = path.join(reportFolder, 'ExecutionEvidence.docx');
+    const outputFile =
+        path.join(
+            reportFolder,
+            'ExecutionEvidence.docx'
+        );
 
     fs.writeFileSync(outputFile, buffer);
 
-    console.log(`📄 Word Evidence Generated: ${outputFile}`);
+    console.log(
+        `📄 Word Evidence Generated: ${outputFile}`
+    );
 }
 
 module.exports = generateWordReport;

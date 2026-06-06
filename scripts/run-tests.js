@@ -1,325 +1,466 @@
-// ======================================
+// ======================================================
 // scripts/run-tests.js
-// ENHANCED VERSION
+// ======================================================
 //
-// New features:
-// 1. Evidence format: docx or txt (from properties)
-// 2. Copy test data to reports: true/false (from properties)
-// 3. Test case name column: configurable (from properties)
-// 4. Multiple APIs per iteration: all captured correctly
-// 5. Postman API live fetch: no need to export collection JSON
-// ======================================
+// FLOW:
+//   1. Read framework.properties
+//   2. Load live-collection.json from collectionOutputPath
+//      → Run download-collection.js first if file is missing
+//   3. Run target folder from live collection
+//      → HTML report, evidence (docx or txt)
+//      → update CSV/Excel data file
+//      → optionally copy data file to report folder
+//
+// To refresh the collection from Postman at any time:
+//   node download-collection.js
+//
+// ======================================================
 
-const fs    = require('fs');
-const path  = require('path');
-const Papa  = require('papaparse');
+const fs     = require('fs');
+const path   = require('path');
+const Papa   = require('papaparse');
 const newman = require('newman');
-const XLSX  = require('xlsx');
-const yaml  = require('js-yaml');
+const XLSX   = require('xlsx');
+const yaml   = require('js-yaml');
 
-const readProperties        = require('./properties-reader');
-const fetchPostmanCollection = require('./postman-api-fetcher');
-const generateWordReport    = require('./generate-word-report');
-const generateTextReport    = require('./generate-text-report');
+const readProperties       = require('./properties-reader');
+const generateWordReport   = require('./generate-word-report');
+const generateTextReport   = require('./generate-text-report');
+const generateExtentReport = require('./generate-extent-report');
 
 const {
     getValueFromPath,
     getFileConfig
 } = require('./utils');
 
-// ======================================
+// ======================================================
 // LOAD FRAMEWORK CONFIG
-// ======================================
+// ======================================================
 
-const framework = readProperties('./config/framework.properties');
+const framework =
+    readProperties('./config/framework.properties');
 
-// ======================================
-// READ NEW CONFIG OPTIONS
-// ======================================
+// ── new config values ──────────────────────────────────
 
-// Evidence format: 'docx' (default) or 'txt'
 const evidenceFormat =
-    (framework.evidenceFormat || 'docx').toLowerCase().trim();
+    (framework.evidenceFormat || 'docx')
+        .toLowerCase()
+        .trim();
 
-// Copy test data file to reports: 'true' or 'false'
 const copyTestDataToReports =
-    (framework.copyTestDataToReports || 'true').toLowerCase().trim() === 'true';
+    (framework.copyTestDataToReports || 'true')
+        .toLowerCase()
+        .trim() === 'true';
 
-// Test case name column in data file
 const testCaseNameColumn =
-    (framework.testCaseNameColumn || 'testCaseName').trim();
+    (framework.testCaseNameColumn || 'testCaseName')
+        .trim();
 
-// Collection source: 'file' (default) or 'postman'
-const collectionSource =
-    (framework.collectionSource || 'file').toLowerCase().trim();
+const testScenarioTypeColumn =
+    (framework.testScenarioTypeColumn || '')
+        .trim();
 
-console.log(`\n📋 Evidence Format:         ${evidenceFormat.toUpperCase()}`);
-console.log(`📂 Copy Test Data:          ${copyTestDataToReports}`);
-console.log(`🏷️  Test Case Name Column:  ${testCaseNameColumn}`);
-console.log(`🌐 Collection Source:       ${collectionSource}`);
+console.log('\n📋 Framework Configuration');
+console.log(`   Evidence Format:          ${evidenceFormat.toUpperCase()}`);
+console.log(`   Copy Test Data:           ${copyTestDataToReports}`);
+console.log(`   Test Case Name Column:    ${testCaseNameColumn}`);
+console.log(`   Scenario Type Column:     ${testScenarioTypeColumn || '(not set)'}`);
 
-// ======================================
-// INPUTS
-// ======================================
+// ======================================================
+// INPUTS FROM runner.js
+// ======================================================
 
-const targetFolder   = process.argv[2];
-const iterationCount = process.argv[3];
+const targetFolder =
+    process.argv[2];
 
-// ======================================
+const iterationCount =
+    process.argv[3];
+
+// ======================================================
+// COLLECTION OUTPUT PATH
+// ======================================================
+
+const collectionOutputPath =
+    framework.collectionOutputPath ||
+    './collection/live-collection.json';
+
+// ======================================================
 // LOAD MAPPING FILES
-// ======================================
+// ======================================================
 
-const folderFile =
-    framework.mappingType === 'yaml'
-        ? './config/folderMapping.yaml'
-        : './config/folderMapping.json';
+const isYaml =
+    framework.mappingType === 'yaml';
 
-const mappingFile =
-    framework.mappingType === 'yaml'
-        ? './config/mapping.yaml'
-        : './config/mapping.json';
+// ── API field mapping (csv_update) ─────────────────────
 
 let apiFieldMapping = {};
+
+try {
+
+    apiFieldMapping = isYaml
+        ? yaml.load(
+            fs.readFileSync('./config/csv_update.yaml', 'utf8')
+          )
+        : JSON.parse(
+            fs.readFileSync('./config/csv_update.json', 'utf8')
+          );
+
+} catch {
+
+    console.log(
+        'ℹ️  No API field mapping found (csv_update) — skipping field extraction'
+    );
+}
+
+// ── folder mapping ─────────────────────────────────────
+
 let folderCsvMap = {};
 
-// Load API field mapping (optional - ok if missing)
 try {
-    apiFieldMapping =
-        framework.mappingType === 'yaml'
-            ? yaml.load(fs.readFileSync(mappingFile, 'utf8'))
-            : require(path.resolve(mappingFile));
+
+    folderCsvMap = isYaml
+        ? yaml.load(
+            fs.readFileSync('./config/folderMapping.yaml', 'utf8')
+          )
+        : JSON.parse(
+            fs.readFileSync('./config/folderMapping.json', 'utf8')
+          );
+
 } catch {
-    console.log('ℹ️  No API field mapping file found — skipping field extraction');
+
+    console.log(
+        'ℹ️  No folder mapping found — running without data file'
+    );
 }
 
-// Load folder mapping
-try {
-    folderCsvMap =
-        framework.mappingType === 'yaml'
-            ? yaml.load(fs.readFileSync(folderFile, 'utf8'))
-            : require(path.resolve(folderFile));
-} catch {
-    console.log('ℹ️  No folder mapping file found — running without data file');
-}
-
-// ======================================
-// STORES
-// ======================================
-
-// responseStore[iteration] = [ { apiName, statusCode, requestBody, responseBody }, ... ]
-let iterationApiStore = {};
-
-// resultStore[iteration] = { [apiName]: 'PASSED' | 'FAILED' }
-let iterationResultStore = {};
-
-// Raw data rows (for test case name lookup)
-let iterationDataRows = [];
-
-// ======================================
+// ======================================================
 // REPORT FOLDER
-// ======================================
+// ======================================================
 
 const timestamp =
-    new Date().toISOString().replace(/[:.]/g, '-');
+    new Date()
+        .toISOString()
+        .replace(/[:.]/g, '-');
 
 const reportFolder =
     `./reports/${targetFolder || 'ROOT'}_${timestamp}`;
 
-const evidenceFolder =
-    `${reportFolder}/evidence`;
+// evidence folder removed — individual txt files not generated
 
-fs.mkdirSync(evidenceFolder, { recursive: true });
-
-// ======================================
-// INPUT FILE CONFIG
-// ======================================
+// ======================================================
+// GET INPUT FILE FOR TARGET FOLDER
+// ======================================================
 
 let currentFolderConfig = null;
 
 if (targetFolder && folderCsvMap[targetFolder]) {
-    currentFolderConfig = getFileConfig(folderCsvMap, targetFolder);
+
+    currentFolderConfig =
+        getFileConfig(folderCsvMap, targetFolder);
+
 } else if (folderCsvMap['ROOT']) {
-    currentFolderConfig = getFileConfig(folderCsvMap, 'ROOT');
+
+    currentFolderConfig =
+        getFileConfig(folderCsvMap, 'ROOT');
 }
 
-let inputFile = currentFolderConfig?.file || null;
+const inputFile =
+    currentFolderConfig?.file || null;
 
-// ======================================
-// READ EXCEL DATA
-// ======================================
+// ======================================================
+// READ EXCEL DATA → array of row objects
+// ======================================================
 
 function readExcelData(excelPath, worksheetName) {
 
-    const workbook = XLSX.readFile(excelPath);
+    const workbook =
+        XLSX.readFile(excelPath);
 
-    if (!worksheetName || !workbook.SheetNames.includes(worksheetName)) {
+    if (
+        !worksheetName ||
+        !workbook.SheetNames.includes(worksheetName)
+    ) {
         worksheetName = workbook.SheetNames[0];
         console.log(`📄 Using first worksheet: ${worksheetName}`);
     } else {
         console.log(`📄 Using worksheet: ${worksheetName}`);
     }
 
-    const worksheet = workbook.Sheets[worksheetName];
+    const worksheet =
+        workbook.Sheets[worksheetName];
 
-    return XLSX.utils.sheet_to_json(worksheet, { defval: '', raw: false });
+    return XLSX.utils.sheet_to_json(
+        worksheet,
+        { defval: '', raw: false }
+    );
 }
 
-// ======================================
-// MAIN RUN (async to support Postman API fetch)
-// ======================================
+// ======================================================
+// SSL OPTIONS
+// ======================================================
+
+const sslOptions = {
+    enabled:    framework.sslEnabled === 'true',
+    cert:       framework.sslEnabled === 'true'
+                    ? fs.readFileSync(framework.sslCert)
+                    : null,
+    key:        framework.sslEnabled === 'true'
+                    ? fs.readFileSync(framework.sslKey)
+                    : null,
+    passphrase: framework.sslPassphrase
+};
+
+// ======================================================
+// STORES
+// ======================================================
+
+// iterationApiStore[i] = [ { apiName, statusCode, requestBody, responseBody, result } ]
+const iterationApiStore = {};
+
+// responseStore[storeKey][i] = { col: value, ... }
+const responseStore = {};
+
+// resultStore[storeKey][i] = 'PASSED' | 'FAILED'
+const resultStore = {};
+
+// Raw data rows for test case name lookup
+let iterationDataRows = [];
+
+// ======================================================
+// BUILD REQUEST → FOLDER MAP
+// (walks the loaded collection tree)
+// ======================================================
+
+function buildRequestFolderMap(
+    items,
+    currentFolder = null,
+    map = {}
+) {
+
+    if (!Array.isArray(items)) return map;
+
+    items.forEach(item => {
+
+        if (item.item) {
+
+            buildRequestFolderMap(
+                item.item,
+                item.name,
+                map
+            );
+
+        } else {
+
+            map[item.name] =
+                currentFolder || 'ROOT';
+        }
+    });
+
+    return map;
+}
+
+// ======================================================
+// MAIN
+// ======================================================
 
 async function main() {
 
-    // ======================================
-    // LOAD COLLECTION
-    // ======================================
+    // ── 1. load live-collection.json ───────────────────
+    //
+    // Run  node download-collection.js  first if you
+    // need to pull the latest version from Postman.
 
-    let collection;
-
-    if (collectionSource === 'postman') {
-
-        collection = await fetchPostmanCollection(
-            framework.postmanApiKey,
-            framework.postmanCollectionId
+    if (!fs.existsSync(path.resolve(collectionOutputPath))) {
+        console.log(
+            `\n❌  Collection file not found: ${collectionOutputPath}` +
+            `\n    Run this first to download it from Postman:` +
+            `\n    node download-collection.js\n`
         );
-
-    } else {
-
-        const collectionPath = framework.collection;
-
-        if (!collectionPath) {
-            console.log('❌ Collection path missing in framework.properties');
-            process.exit(1);
-        }
-
-        collection = require(path.resolve(collectionPath));
-        console.log(`📦 Loaded collection from file: ${collectionPath}`);
+        process.exit(1);
     }
 
-    // ======================================
-    // BUILD REQUEST → FOLDER MAP
-    // ======================================
+    let liveCollection;
 
-    function buildRequestFolderMap(items, currentFolder = null, map = {}) {
-        if (!Array.isArray(items)) return map;
-        items.forEach(item => {
-            if (item.item) {
-                buildRequestFolderMap(item.item, item.name, map);
-            } else {
-                map[item.name] = currentFolder || 'ROOT';
-            }
-        });
-        return map;
+    try {
+
+        const raw =
+            fs.readFileSync(
+                path.resolve(collectionOutputPath),
+                'utf8'
+            );
+
+        liveCollection = JSON.parse(raw);
+
+    } catch (err) {
+        console.log(
+            `❌  Failed to load collection from: ${collectionOutputPath}\n` +
+            `    ${err.message}\n` +
+            `    Run: node download-collection.js`
+        );
+        process.exit(1);
     }
 
-    const requestFolderMap = buildRequestFolderMap(collection.item);
+    console.log(
+        `\n📦 Collection loaded: "${liveCollection.info?.name || collectionOutputPath}"` +
+        `\n🚀 Starting test run: ${targetFolder || 'ROOT'}`
+    );
 
-    // ======================================
-    // NEWMAN OPTIONS
-    // ======================================
+    // ── 4. build request→folder map ────────────────────
+
+    const requestFolderMap =
+        buildRequestFolderMap(liveCollection.item);
+
+    // ── 5. build newman options ────────────────────────
 
     const newmanOptions = {
-        collection,
+
+        collection: liveCollection,
+
         reporters: ['cli', 'htmlextra'],
+
         reporter: {
             htmlextra: {
-                export:       `${reportFolder}/report.html`,
-                title:        `${targetFolder || 'ROOT'} Report`,
+                export:           `${reportFolder}/report.html`,
+                title:            `${targetFolder || 'ROOT'} Report`,
                 showIterationData: true,
-                logs:         true,
-                browserTitle: 'Automation Report'
+                logs:              true,
+                browserTitle:      'Automation Report'
             }
         },
-        timeout:       0,
+
+        timeout:        0,
         timeoutRequest: 0,
-        timeoutScript: 0
+        timeoutScript:  0
     };
 
-    // Iteration count
+    // iteration count
     if (
         iterationCount !== undefined &&
         iterationCount !== null &&
         iterationCount !== '' &&
         !isNaN(iterationCount)
     ) {
-        newmanOptions.iterationCount = Number(iterationCount);
-        console.log(`🔁 Running ${iterationCount} iterations`);
+        newmanOptions.iterationCount =
+            Number(iterationCount);
+
+        console.log(
+            `🔁 Running ${iterationCount} iterations`
+        );
+
     } else {
+
         console.log('🔁 Running ALL iterations');
     }
 
-    // Folder filter
+    // folder filter
     if (targetFolder) {
         newmanOptions.folder = targetFolder;
     }
 
-    // Input data
+    // data file
     if (inputFile) {
+
         if (inputFile.endsWith('.xlsx')) {
-            const worksheet = currentFolderConfig?.worksheet;
-            const rows = readExcelData(inputFile, worksheet);
+
+            const rows =
+                readExcelData(
+                    inputFile,
+                    currentFolderConfig?.worksheet
+                );
+
             iterationDataRows = rows;
             newmanOptions.iterationData = rows;
+
             console.log(`📘 Using Excel File: ${inputFile}`);
+
         } else {
-            // CSV — pre-read rows for testCaseName lookup
+
+            // CSV — pre-read rows so we can look up testCaseName
             try {
-                const csvContent = fs.readFileSync(inputFile, 'utf8');
-                const parsed = Papa.parse(csvContent, {
-                    header: true,
-                    skipEmptyLines: true
-                });
+                const csvContent =
+                    fs.readFileSync(inputFile, 'utf8');
+
+                const parsed =
+                    Papa.parse(csvContent, {
+                        header: true,
+                        skipEmptyLines: true
+                    });
+
                 iterationDataRows = parsed.data;
+
             } catch {
                 iterationDataRows = [];
             }
+
             newmanOptions.iterationData = inputFile;
+
             console.log(`📄 Using CSV File: ${inputFile}`);
         }
+
     } else {
+
         console.log('ℹ️  Running without data file');
     }
 
     // SSL
-    if (framework.sslEnabled === 'true') {
+    if (sslOptions.enabled) {
+
         console.log('🔐 SSL Enabled');
-        newmanOptions.sslClientCert     = fs.readFileSync(framework.sslCert);
-        newmanOptions.sslClientKey      = fs.readFileSync(framework.sslKey);
-        newmanOptions.sslClientPassphrase = framework.sslPassphrase;
+
+        newmanOptions.sslClientCert =
+            sslOptions.cert;
+
+        newmanOptions.sslClientKey =
+            sslOptions.key;
+
+        newmanOptions.sslClientPassphrase =
+            sslOptions.passphrase;
     }
 
-    // ======================================
-    // RUN NEWMAN
-    // ======================================
+    // ── 6. run newman ──────────────────────────────────
+
+    const runStartTime = new Date();
 
     newman.run(newmanOptions)
 
-    // ======================================
-    // REQUEST EVENT — capture per API per iteration
-    // ======================================
+    // ── REQUEST EVENT ──────────────────────────────────
 
     .on('request', (err, args) => {
 
         if (err) return;
 
-        const requestName = args.item.name;
-        const folderName  = requestFolderMap[requestName] || 'ROOT';
+        const requestName =
+            args.item.name;
 
-        // Skip if not in target folder
+        const folderName =
+            requestFolderMap[requestName] || 'ROOT';
+
+        // skip requests outside the target folder
         if (
             targetFolder &&
             folderName !== targetFolder &&
             requestName !== targetFolder
-        ) return;
+        ) {
+            return;
+        }
 
-        const iteration    = args.cursor.iteration;
-        const requestBody  = args.request.body?.raw || '';
-        const responseBody = args.response.stream.toString();
-        const statusCode   = args.response.code;
+        const iteration =
+            args.cursor.iteration;
+
+        const requestBody =
+            args.request.body?.raw || '';
+
+        const responseBody =
+            args.response.stream.toString();
+
+        const statusCode =
+            args.response.code;
+
+        // ── console output ─────────────────────────────
 
         console.log('\n================================');
-        console.log(`API: ${requestName}`);
-        console.log(`Iteration: ${iteration}`);
+        console.log(`API:         ${requestName}`);
+        console.log(`Iteration:   ${iteration}`);
         console.log(`Status Code: ${statusCode}`);
         console.log('\nREQUEST BODY:\n');
         console.log(requestBody);
@@ -327,66 +468,82 @@ async function main() {
         console.log(responseBody);
         console.log('\n================================');
 
-        // Write individual evidence file (raw backup)
-        const evidenceFile = `${evidenceFolder}/${requestName}_iter${iteration}.txt`;
-        fs.writeFileSync(
-            evidenceFile,
-`REQUEST BODY:
+        // ── collect for report ─────────────────────────
 
-${requestBody}
-
-==================================================
-
-RESPONSE BODY:
-
-${responseBody}
-`
-        );
-
-        // Collect into iteration store
         if (!iterationApiStore[iteration]) {
             iterationApiStore[iteration] = [];
         }
 
         iterationApiStore[iteration].push({
-            apiName:      requestName,
-            statusCode:   statusCode,
-            requestBody:  requestBody,
-            responseBody: responseBody,
-            result:       null  // filled in 'done'
+            apiName:         requestName,
+            method:          args.request.method || 'GET',
+            url:             args.request.url?.toString() || '',
+            statusCode:      statusCode,
+            requestBody:     requestBody,
+            responseBody:    responseBody,
+            requestHeaders:  (() => {
+                const h = {};
+                (args.request.headers?.members || []).forEach(m => {
+                    if (m.key) h[m.key] = m.value || '';
+                });
+                return h;
+            })(),
+            responseHeaders: (() => {
+                const h = {};
+                (args.response.headers?.members || []).forEach(m => {
+                    if (m.key) h[m.key] = m.value || '';
+                });
+                return h;
+            })(),
+            responseTime:    args.response.responseTime || 0,
+            result:          null,   // filled in 'done'
+            assertions:      []      // filled in 'done'
         });
 
-        // Also store CSV update fields (response field mapping)
+        // ── response field extraction ──────────────────
+
+        const storeKey =
+            targetFolder === requestName
+                ? targetFolder
+                : folderName;
+
+        if (!responseStore[storeKey]) {
+            responseStore[storeKey] = [];
+        }
+
+        if (!responseStore[storeKey][iteration]) {
+            responseStore[storeKey][iteration] = {};
+        }
+
+        responseStore[storeKey][iteration].requestBody  = requestBody;
+        responseStore[storeKey][iteration].responseBody = responseBody;
+        responseStore[storeKey][iteration].responseStatusCode = statusCode;
+
         try {
+
             const res = JSON.parse(responseBody);
-            const storeKey = targetFolder === requestName ? targetFolder : folderName;
 
-            // We keep the old responseStore logic for CSV/Excel update
-            if (!global._responseStore) global._responseStore = {};
-            if (!global._responseStore[storeKey]) global._responseStore[storeKey] = [];
-            if (!global._responseStore[storeKey][iteration]) {
-                global._responseStore[storeKey][iteration] = {};
-            }
+            const mapping =
+                apiFieldMapping[requestName];
 
-            global._responseStore[storeKey][iteration].requestBody  = requestBody;
-            global._responseStore[storeKey][iteration].responseBody = responseBody;
-            global._responseStore[storeKey][iteration].responseStatusCode = statusCode;
+            if (mapping && mapping !== null) {
 
-            const mapping = apiFieldMapping[requestName];
-            if (mapping) {
                 Object.keys(mapping).forEach(col => {
-                    global._responseStore[storeKey][iteration][col] =
+
+                    responseStore[storeKey][iteration][col] =
                         getValueFromPath(res, mapping[col]);
                 });
             }
+
         } catch {
-            console.log(`⚠️  Non-JSON response for: ${requestName}`);
+
+            console.log(
+                `⚠️  Non-JSON response for: ${requestName}`
+            );
         }
     })
 
-    // ======================================
-    // DONE EVENT — finalize results + generate reports
-    // ======================================
+    // ── DONE EVENT ─────────────────────────────────────
 
     .on('done', async (err, summary) => {
 
@@ -395,106 +552,149 @@ ${responseBody}
             process.exit(1);
         }
 
-        // ======================================
-        // COLLECT PASS/FAIL PER API PER ITERATION
-        // ======================================
+        // ── collect pass/fail per API per iteration ────
 
         summary.run.executions.forEach(exec => {
 
-            const requestName = exec.item.name;
-            const folderName  = requestFolderMap[requestName] || 'ROOT';
+            const requestName =
+                exec.item.name;
+
+            const folderName =
+                requestFolderMap[requestName] || 'ROOT';
 
             if (
                 targetFolder &&
                 folderName !== targetFolder &&
                 requestName !== targetFolder
-            ) return;
-
-            const i      = exec.cursor.iteration;
-            const passed = exec.assertions?.every(a => !a.error) ?? true;
-            const result = passed ? 'PASSED' : 'FAILED';
-
-            // Mark result in iterationApiStore
-            if (iterationApiStore[i]) {
-                const apiEntry = iterationApiStore[i].find(
-                    a => a.apiName === requestName
-                );
-                if (apiEntry) apiEntry.result = result;
+            ) {
+                return;
             }
 
-            // For CSV/Excel update
-            const storeKey = targetFolder === requestName ? targetFolder : folderName;
-            if (!global._resultStore) global._resultStore = {};
-            if (!global._resultStore[storeKey]) global._resultStore[storeKey] = [];
-            global._resultStore[storeKey][i] = result;
+            const i =
+                exec.cursor.iteration;
+
+            const passed =
+                exec.assertions?.every(a => !a.error) ?? true;
+
+            const result =
+                passed ? 'PASSED' : 'FAILED';
+
+            // mark result + assertions in iterationApiStore
+            if (iterationApiStore[i]) {
+
+                const apiEntry =
+                    iterationApiStore[i].find(
+                        a => a.apiName === requestName
+                    );
+
+                if (apiEntry) {
+                    apiEntry.result = result;
+                    apiEntry.assertions = (exec.assertions || []).map(a => ({
+                        name:   a.assertion || '',
+                        passed: !a.error,
+                        error:  a.error ? a.error.message || String(a.error) : null
+                    }));
+                }
+            }
+
+            // result store for CSV/Excel update
+            const storeKey =
+                targetFolder === requestName
+                    ? targetFolder
+                    : folderName;
+
+            if (!resultStore[storeKey]) {
+                resultStore[storeKey] = [];
+            }
+
+            resultStore[storeKey][i] = result;
         });
 
-        // ======================================
-        // ASSEMBLE EVIDENCE DATA
-        // Grouped by iteration, all APIs per iteration
-        // ======================================
+        // ── assemble evidence data ─────────────────────
 
         const evidenceData = [];
 
-        const iterations = Object.keys(iterationApiStore)
-            .map(Number)
-            .sort((a, b) => a - b);
+        const iterations =
+            Object.keys(iterationApiStore)
+                .map(Number)
+                .sort((a, b) => a - b);
 
         iterations.forEach(iter => {
 
             const testCaseName =
                 iterationDataRows[iter]
-                    ? (iterationDataRows[iter][testCaseNameColumn] || `Iteration ${iter}`)
+                    ? (
+                        iterationDataRows[iter][testCaseNameColumn] ||
+                        `Iteration ${iter}`
+                      )
                     : `Iteration ${iter}`;
 
-            // Ensure all APIs have a result
-            const apis = iterationApiStore[iter].map(api => ({
-                ...api,
-                result: api.result || 'UNKNOWN'
-            }));
+            const scenarioType =
+                testScenarioTypeColumn && iterationDataRows[iter]
+                    ? (iterationDataRows[iter][testScenarioTypeColumn] || '')
+                    : '';
+
+            const apis =
+                iterationApiStore[iter].map(api => ({
+                    ...api,
+                    result: api.result || 'UNKNOWN'
+                }));
 
             evidenceData.push({
                 iteration:    iter,
                 testCaseName,
+                scenarioType,
                 apis
             });
         });
 
-        // ======================================
-        // GENERATE EVIDENCE REPORT
-        // ======================================
+        // ── generate evidence report ───────────────────
 
         if (evidenceData.length > 0) {
 
             if (evidenceFormat === 'txt') {
 
-                generateTextReport(reportFolder, evidenceData);
+                generateTextReport(
+                    reportFolder,
+                    evidenceData
+                );
 
             } else {
 
-                // Default: docx
                 try {
-                    await generateWordReport(reportFolder, evidenceData);
+
+                    await generateWordReport(
+                        reportFolder,
+                        evidenceData
+                    );
+
                 } catch (docxErr) {
-                    console.log(`⚠️  Word report failed: ${docxErr.message}`);
-                    console.log('   Falling back to text report...');
-                    generateTextReport(reportFolder, evidenceData);
+
+                    console.log(
+                        `⚠️  Word report failed: ${docxErr.message}`
+                    );
+                    console.log(
+                        '   Falling back to text report…'
+                    );
+
+                    generateTextReport(
+                        reportFolder,
+                        evidenceData
+                    );
                 }
             }
 
         } else {
+
             console.log('⚠️  No evidence data collected');
         }
 
-        // ======================================
-        // UPDATE DATA FILE (CSV/Excel)
-        // ======================================
+        // ── update data file ───────────────────────────
 
         if (currentFolderConfig && inputFile) {
 
-            const responseStore = global._responseStore || {};
-            const resultStore   = global._resultStore   || {};
-            const storeKey      = targetFolder || 'ROOT';
+            const storeKey =
+                targetFolder || 'ROOT';
 
             await updateDataFile(
                 inputFile,
@@ -504,33 +704,68 @@ ${responseBody}
             );
         }
 
+        // ── generate extent report ────────────────────
+
+        const runEndTime = new Date();
+
+        generateExtentReport(
+            reportFolder,
+            evidenceData,
+            {
+                collectionName: liveCollection.info?.name || 'Newman Tests',
+                folderName:     targetFolder || 'ROOT',
+                startTime:      runStartTime,
+                endTime:        runEndTime,
+                totalDuration:  runEndTime - runStartTime
+            }
+        );
+
         console.log('\n🎉 Execution Completed');
+        console.log(`📁 Extent Report:  ${reportFolder}/extent-report.html`);
+        console.log(`📁 HTML Report:    ${reportFolder}/report.html`);
     });
 }
 
-// ======================================
+// ======================================================
 // UPDATE DATA FILE (CSV or XLSX)
-// ======================================
+// ======================================================
 
-function updateDataFile(filePath, responseData, results, config) {
+function updateDataFile(
+    filePath,
+    responseData,
+    results,
+    config
+) {
 
     return new Promise(resolve => {
 
+        // ── EXCEL ──────────────────────────────────────
+
         if (filePath.endsWith('.xlsx')) {
 
-            const workbook = XLSX.readFile(filePath);
+            const workbook =
+                XLSX.readFile(filePath);
 
             const worksheetName =
-                config.worksheet && workbook.SheetNames.includes(config.worksheet)
+                config.worksheet &&
+                workbook.SheetNames.includes(config.worksheet)
                     ? config.worksheet
                     : workbook.SheetNames[0];
 
-            const worksheet = workbook.Sheets[worksheetName];
+            const worksheet =
+                workbook.Sheets[worksheetName];
 
-            const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: '', raw: false });
+            const jsonData =
+                XLSX.utils.sheet_to_json(
+                    worksheet,
+                    { defval: '', raw: false }
+                );
 
             jsonData.forEach((row, i) => {
-                row.testResult = results[i] || '';
+
+                row.testResult =
+                    results[i] || '';
+
                 if (responseData[i]) {
                     Object.keys(responseData[i]).forEach(key => {
                         row[key] = responseData[i][key];
@@ -538,20 +773,38 @@ function updateDataFile(filePath, responseData, results, config) {
                 }
             });
 
-            workbook.Sheets[worksheetName] = XLSX.utils.json_to_sheet(jsonData);
+            workbook.Sheets[worksheetName] =
+                XLSX.utils.json_to_sheet(jsonData);
 
             XLSX.writeFile(workbook, filePath);
 
             console.log(`📘 Updated Excel: ${filePath}`);
 
-            // Copy to reports if enabled
+            // copy to reports
             if (copyTestDataToReports) {
-                const dest = path.join(reportFolder, path.basename(filePath));
+
+                const dest =
+                    path.join(
+                        reportFolder,
+                        path.basename(filePath)
+                    );
+
                 fs.copyFileSync(filePath, dest);
-                console.log(`📂 Test data copied to reports: ${dest}`);
+
+                console.log(
+                    `📂 Test data copied to reports: ${path.basename(filePath)}`
+                );
+
+            } else {
+
+                console.log(
+                    'ℹ️  Test data copy skipped (copyTestDataToReports=false)'
+                );
             }
 
             resolve();
+
+        // ── CSV ────────────────────────────────────────
 
         } else {
 
@@ -562,13 +815,17 @@ function updateDataFile(filePath, responseData, results, config) {
                     return resolve();
                 }
 
-                const parsed = Papa.parse(data, {
-                    header: true,
-                    skipEmptyLines: true
-                });
+                const parsed =
+                    Papa.parse(data, {
+                        header: true,
+                        skipEmptyLines: true
+                    });
 
                 parsed.data.forEach((row, i) => {
-                    row.testResult = results[i] || '';
+
+                    row.testResult =
+                        results[i] || '';
+
                     if (responseData[i]) {
                         Object.keys(responseData[i]).forEach(key => {
                             row[key] = responseData[i][key];
@@ -576,32 +833,46 @@ function updateDataFile(filePath, responseData, results, config) {
                     }
                 });
 
-                const updatedCsv = Papa.unparse(parsed.data);
+                const updatedCsv =
+                    Papa.unparse(parsed.data);
+
                 fs.writeFileSync(filePath, updatedCsv);
+
                 console.log(`📄 Updated CSV: ${filePath}`);
 
-                // Copy to reports if enabled
+                // copy to reports
                 if (copyTestDataToReports) {
-                    const dest = path.join(reportFolder, path.basename(filePath));
+
+                    const dest =
+                        path.join(
+                            reportFolder,
+                            path.basename(filePath)
+                        );
+
                     fs.copyFileSync(filePath, dest);
-                    console.log(`📂 Test data copied to reports: ${dest}`);
+
+                    console.log(
+                        `📂 Test data copied to reports: ${path.basename(filePath)}`
+                    );
+
                 } else {
-                    console.log('ℹ️  Test data copy skipped (copyTestDataToReports=false)');
+
+                    console.log(
+                        'ℹ️  Test data copy skipped (copyTestDataToReports=false)'
+                    );
                 }
 
                 resolve();
             });
-
-            return;
         }
     });
 }
 
-// ======================================
+// ======================================================
 // KICK OFF
-// ======================================
+// ======================================================
 
 main().catch(err => {
-    console.error(`❌ Fatal Error: ${err.message}`);
+    console.error(`\n❌ Fatal Error: ${err.message}`);
     process.exit(1);
 });

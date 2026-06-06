@@ -1,39 +1,50 @@
 // ======================================================
 // scripts/generate-extent-report.js
 //
-// Generates an Extent Reports-style HTML report.
+// Generates a fully self-contained Extent-style HTML
+// report. Zero external dependencies.
 //
-// Layout:
-//   • Top navbar with project name and run timestamp
-//   • Dashboard: total / passed / failed / skipped cards
-//     + donut chart (pass vs fail)
-//   • Iteration-level timeline on the left sidebar
-//   • Test detail panel: each iteration expands to show
-//     every API with request, response, assertions
-//   • Fully self-contained single HTML file — no CDN
+// Features:
+//   • Dark / Light mode toggle (persisted in localStorage)
+//   • Dashboard: total/pass/fail counts + animated donut
+//   • Sidebar: test case name (from data file column) +
+//     scenario type badge (Positive / Negative / custom)
+//   • Detail panel per iteration:
+//       - Header: status badge, test name, scenario type,
+//         iteration number, API count, Download button
+//       - Per-API accordion: Method, URL, status code,
+//         response time, result badge
+//       - Tabs per API: Assertions | Request Body |
+//         Response Body | Headers
+//   • Download button — exports full iteration detail
+//     as a plain-text .txt file (Blob download, no server)
+//   • No evidence/ folder or .txt files on disk
 // ======================================================
 
 const fs   = require('fs');
 const path = require('path');
 
-// ======================================================
-// HELPERS
-// ======================================================
+// ── helpers ────────────────────────────────────────────
 
-function escapeHtml(str) {
+function esc(str) {
     return String(str || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/&/g,  '&amp;')
+        .replace(/</g,  '&lt;')
+        .replace(/>/g,  '&gt;')
+        .replace(/"/g,  '&quot;')
+        .replace(/'/g,  '&#39;');
 }
 
-function formatJson(str) {
-    try {
-        return JSON.stringify(JSON.parse(str), null, 2);
-    } catch {
-        return str;
-    }
+function escJs(str) {
+    return String(str || '')
+        .replace(/\\/g, '\\\\')
+        .replace(/`/g,  '\\`')
+        .replace(/\$/g, '\\$');
+}
+
+function fmtJson(str) {
+    try   { return JSON.stringify(JSON.parse(str), null, 2); }
+    catch { return String(str || ''); }
 }
 
 // ======================================================
@@ -42,716 +53,610 @@ function formatJson(str) {
 
 /**
  * @param {string} reportFolder
- * @param {Array}  evidenceData
- * @param {object} meta
- *   {
- *     collectionName: string,
- *     folderName:     string,
- *     startTime:      Date,
- *     endTime:        Date,
- *     totalDuration:  number  (ms)
- *   }
+ * @param {Array}  evidenceData  — see shape below
+ * @param {object} meta          — see shape below
  *
- * evidenceData shape:
- * [
- *   {
- *     iteration:    number,
- *     testCaseName: string,
- *     apis: [
- *       {
- *         apiName:      string,
- *         method:       string,
- *         url:          string,
- *         statusCode:   number,
- *         requestBody:  string,
- *         responseBody: string,
- *         requestHeaders:  object,
- *         responseHeaders: object,
- *         responseTime: number,   (ms)
- *         result:       'PASSED'|'FAILED',
- *         assertions: [
- *           { name: string, passed: boolean, error: string|null }
- *         ]
- *       }
- *     ]
- *   }
- * ]
+ * evidenceData item:
+ * {
+ *   iteration:    number,
+ *   testCaseName: string,   — from testCaseNameColumn in data file
+ *   scenarioType: string,   — from testScenarioTypeColumn in data file
+ *   apis: [{
+ *     apiName:         string,
+ *     method:          string,
+ *     url:             string,
+ *     statusCode:      number,
+ *     requestBody:     string,
+ *     responseBody:    string,
+ *     requestHeaders:  object,
+ *     responseHeaders: object,
+ *     responseTime:    number,
+ *     result:          'PASSED'|'FAILED',
+ *     assertions: [{ name:string, passed:boolean, error:string|null }]
+ *   }]
+ * }
+ *
+ * meta:
+ * {
+ *   collectionName: string,
+ *   folderName:     string,
+ *   startTime:      Date,
+ *   endTime:        Date,
+ *   totalDuration:  number (ms)
+ * }
  */
-function generateExtentReport(
-    reportFolder,
-    evidenceData,
-    meta
-) {
+function generateExtentReport(reportFolder, evidenceData, meta) {
 
     if (!evidenceData || evidenceData.length === 0) {
         console.log('⚠️  No evidence data for Extent report');
         return;
     }
 
-    // ── summary counts ──────────────────────────────────
+    // ── summary counts ─────────────────────────────────
 
-    const totalIterations  = evidenceData.length;
-    const passedIterations = evidenceData.filter(
-        d => !d.apis.some(a => a.result === 'FAILED')
-    ).length;
-    const failedIterations = totalIterations - passedIterations;
+    const total  = evidenceData.length;
+    const passed = evidenceData.filter(d => !d.apis.some(a => a.result === 'FAILED')).length;
+    const failed = total - passed;
 
-    let totalApis  = 0;
-    let passedApis = 0;
-    let failedApis = 0;
-    let totalAssertions  = 0;
-    let passedAssertions = 0;
-    let failedAssertions = 0;
+    let totalApis = 0, passApis = 0, failApis = 0;
+    let totalAssert = 0, passAssert = 0, failAssert = 0;
 
     evidenceData.forEach(iter => {
         iter.apis.forEach(api => {
             totalApis++;
-            if (api.result === 'PASSED') passedApis++;
-            else failedApis++;
+            api.result === 'PASSED' ? passApis++ : failApis++;
             (api.assertions || []).forEach(a => {
-                totalAssertions++;
-                if (a.passed) passedAssertions++;
-                else failedAssertions++;
+                totalAssert++;
+                a.passed ? passAssert++ : failAssert++;
             });
         });
     });
 
-    const passRate = totalIterations > 0
-        ? Math.round((passedIterations / totalIterations) * 100)
-        : 0;
+    const passRate  = total > 0 ? Math.round((passed / total) * 100) : 0;
+    const donutPass = total > 0 ? Math.round((passed / total) * 251.2) : 0;
+    const donutFail = 251.2 - donutPass;
 
-    const startTime = meta?.startTime
-        ? new Date(meta.startTime).toLocaleString()
-        : new Date().toLocaleString();
+    const startStr = meta?.startTime  ? new Date(meta.startTime).toLocaleString() : new Date().toLocaleString();
+    const endStr   = meta?.endTime    ? new Date(meta.endTime).toLocaleString()   : new Date().toLocaleString();
+    const durStr   = meta?.totalDuration ? `${(meta.totalDuration / 1000).toFixed(2)}s` : '—';
+    const colName  = esc(meta?.collectionName || 'Newman Tests');
+    const folName  = esc(meta?.folderName     || 'All Tests');
 
-    const endTime = meta?.endTime
-        ? new Date(meta.endTime).toLocaleString()
-        : new Date().toLocaleString();
+    // ── scenario badge ─────────────────────────────────
 
-    const duration = meta?.totalDuration
-        ? `${(meta.totalDuration / 1000).toFixed(2)}s`
-        : '—';
+    function scenarioBadge(type, size) {
+        if (!type || !type.trim()) return '';
+        const t   = type.trim();
+        const cls = t.toLowerCase() === 'positive' ? 'sc-pos'
+                  : t.toLowerCase() === 'negative' ? 'sc-neg'
+                  : 'sc-oth';
+        const fs  = size === 'sm' ? 'font-size:9px;' : 'font-size:10px;';
+        return `<span class="sc-badge ${cls}" style="${fs}">${esc(t)}</span>`;
+    }
 
-    const collectionName = meta?.collectionName || 'Newman Tests';
-    const folderName     = meta?.folderName     || 'All Tests';
+    // ── download payload per iteration ─────────────────
+    // Embedded as JS template literals inside the HTML.
+    // The Download button creates a Blob from this string
+    // and triggers a browser download — no server needed.
 
-    // ── donut chart values ──────────────────────────────
+    const dlPayloads = evidenceData.map(iter => {
+        const ok   = !iter.apis.some(a => a.result === 'FAILED');
+        const LINE = '='.repeat(80);
+        const DASH = '-'.repeat(60);
+        let t = '';
+        t += `${LINE}\n`;
+        t += `TEST CASE NAME : ${iter.testCaseName || 'Iteration ' + iter.iteration}\n`;
+        t += `ITERATION      : ${iter.iteration}\n`;
+        if (iter.scenarioType) t += `SCENARIO TYPE  : ${iter.scenarioType}\n`;
+        t += `OVERALL RESULT : ${ok ? 'PASSED' : 'FAILED'}\n`;
+        t += `${LINE}\n\n`;
+        iter.apis.forEach((api, i) => {
+            t += `${DASH}\n`;
+            t += `API #${i + 1} : ${api.apiName || 'Unknown'}\n`;
+            t += `${DASH}\n`;
+            t += `Method        : ${api.method      || ''}\n`;
+            t += `URL           : ${api.url          || ''}\n`;
+            t += `Status Code   : ${api.statusCode   || ''}\n`;
+            t += `Response Time : ${api.responseTime || 0}ms\n`;
+            t += `Result        : ${api.result       || ''}\n\n`;
+            t += `ASSERTIONS\n`;
+            if (api.assertions && api.assertions.length) {
+                api.assertions.forEach(a => {
+                    t += `  [${a.passed ? 'PASS' : 'FAIL'}] ${a.name}`;
+                    if (!a.passed && a.error) t += `  →  ${a.error}`;
+                    t += '\n';
+                });
+            } else {
+                t += '  (none)\n';
+            }
+            t += `\nREQUEST BODY\n${fmtJson(api.requestBody) || '(empty)'}\n\n`;
+            t += `RESPONSE BODY\n${fmtJson(api.responseBody) || '(empty)'}\n\n`;
+        });
+        t += `${LINE}\n`;
+        return escJs(t);
+    });
 
-    const donutPass   = totalIterations > 0
-        ? Math.round((passedIterations / totalIterations) * 251.2)
-        : 0;
-    const donutFail   = 251.2 - donutPass;
+    const dlNames = evidenceData.map((d, i) => {
+        const safe = (d.testCaseName || 'Iteration_' + i)
+            .replace(/[^a-zA-Z0-9_\- ]/g, '_')
+            .replace(/\s+/g, '_')
+            .substring(0, 50);
+        return `Iter_${i}_${safe}.txt`;
+    });
 
-    // ── sidebar items ───────────────────────────────────
+    // ── sidebar ────────────────────────────────────────
 
-    const sidebarItems = evidenceData.map((iter, idx) => {
-
-        const iterPassed = !iter.apis.some(a => a.result === 'FAILED');
-        const statusClass = iterPassed ? 'pass' : 'fail';
-        const statusIcon  = iterPassed ? '✔' : '✖';
-
+    const sidebarHtml = evidenceData.map((iter, idx) => {
+        const ok  = !iter.apis.some(a => a.result === 'FAILED');
+        const cls = ok ? 'pass' : 'fail';
+        const ico = ok ? '✔' : '✖';
         return `
-        <div class="sidebar-item ${statusClass}" onclick="showTest(${idx})" id="sidebar-${idx}">
-            <span class="sidebar-icon">${statusIcon}</span>
-            <span class="sidebar-name">${escapeHtml(iter.testCaseName || `Iteration ${iter.iteration}`)}</span>
-            <span class="sidebar-iter">Iter ${iter.iteration}</span>
+        <div class="si ${cls}" id="si-${idx}" onclick="showTest(${idx})">
+            <span class="si-ico">${ico}</span>
+            <div class="si-body">
+                <span class="si-name">${esc(iter.testCaseName || 'Iteration ' + iter.iteration)}</span>
+                <div class="si-row2">
+                    <span class="si-iter">Iter&nbsp;${iter.iteration}</span>
+                    ${scenarioBadge(iter.scenarioType, 'sm')}
+                </div>
+            </div>
         </div>`;
     }).join('');
 
-    // ── test detail panels ──────────────────────────────
+    // ── test panels ────────────────────────────────────
 
-    const testPanels = evidenceData.map((iter, idx) => {
+    const panelsHtml = evidenceData.map((iter, idx) => {
+        const ok    = !iter.apis.some(a => a.result === 'FAILED');
+        const cls   = ok ? 'pass' : 'fail';
+        const label = ok ? 'PASSED' : 'FAILED';
 
-        const iterPassed  = !iter.apis.some(a => a.result === 'FAILED');
-        const statusClass = iterPassed ? 'pass' : 'fail';
-        const statusLabel = iterPassed ? 'PASSED' : 'FAILED';
+        // per-API accordion blocks
+        const apiHtml = iter.apis.map((api, ai) => {
+            const aok  = api.result === 'PASSED';
+            const acls = aok ? 'pass' : 'fail';
+            const mcls = (api.method || 'GET').toLowerCase();
+            const grp  = `g-${idx}-${ai}`;
 
-        const apiBlocks = iter.apis.map((api, apiIdx) => {
-
-            const apiPassed    = api.result === 'PASSED';
-            const apiClass     = apiPassed ? 'pass' : 'fail';
-            const methodClass  = (api.method || 'GET').toLowerCase();
-
-            const assertionRows = (api.assertions || []).map(a => `
-                <tr class="${a.passed ? 'assert-pass' : 'assert-fail'}">
-                    <td><span class="assert-icon">${a.passed ? '✔' : '✖'}</span></td>
-                    <td>${escapeHtml(a.name)}</td>
-                    <td>${a.passed ? '<span class="badge-pass">PASSED</span>' : '<span class="badge-fail">FAILED</span>'}</td>
-                    <td class="assert-error">${escapeHtml(a.error || '')}</td>
+            // assertions table
+            const assertRows = (api.assertions || []).map(a => `
+                <tr class="${a.passed ? 'arow-p' : 'arow-f'}">
+                    <td class="ai">${a.passed ? '✔' : '✖'}</td>
+                    <td>${esc(a.name)}</td>
+                    <td>${a.passed
+                        ? '<span class="b-pass">PASSED</span>'
+                        : '<span class="b-fail">FAILED</span>'}</td>
+                    <td class="a-err">${esc(a.error || '')}</td>
                 </tr>`).join('');
 
-            const assertionTable = (api.assertions && api.assertions.length > 0)
-                ? `<table class="assert-table">
-                    <thead><tr><th></th><th>Assertion</th><th>Result</th><th>Error</th></tr></thead>
-                    <tbody>${assertionRows}</tbody>
+            const assertTbl = (api.assertions && api.assertions.length)
+                ? `<table class="atbl">
+                     <thead><tr><th></th><th>Assertion</th><th>Result</th><th>Error</th></tr></thead>
+                     <tbody>${assertRows}</tbody>
                    </table>`
-                : `<p class="no-assertions">No assertions defined for this request.</p>`;
+                : `<p class="no-assert">No assertions defined for this request.</p>`;
 
-            const reqHeaders = api.requestHeaders
-                ? Object.entries(api.requestHeaders)
-                    .map(([k,v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`)
-                    .join('')
+            // header tables
+            const mkHdrRows = obj => obj
+                ? Object.entries(obj).map(([k,v]) =>
+                    `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')
                 : '';
-
-            const resHeaders = api.responseHeaders
-                ? Object.entries(api.responseHeaders)
-                    .map(([k,v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`)
-                    .join('')
-                : '';
-
-            const headerTables = (reqHeaders || resHeaders) ? `
-                <div class="headers-row">
-                    ${reqHeaders ? `
-                    <div class="header-block">
-                        <div class="block-label">Request Headers</div>
-                        <table class="header-table">
-                            <thead><tr><th>Key</th><th>Value</th></tr></thead>
-                            <tbody>${reqHeaders}</tbody>
-                        </table>
-                    </div>` : ''}
-                    ${resHeaders ? `
-                    <div class="header-block">
-                        <div class="block-label">Response Headers</div>
-                        <table class="header-table">
-                            <thead><tr><th>Key</th><th>Value</th></tr></thead>
-                            <tbody>${resHeaders}</tbody>
-                        </table>
-                    </div>` : ''}
+            const rqHdr = mkHdrRows(api.requestHeaders);
+            const rsHdr = mkHdrRows(api.responseHeaders);
+            const hdrTab = (rqHdr || rsHdr) ? `
+                <div class="hdr-row">
+                    ${rqHdr ? `<div class="hdr-blk">
+                        <div class="hdr-lbl">Request Headers</div>
+                        <table class="hdrt"><thead><tr><th>Key</th><th>Value</th></tr></thead>
+                        <tbody>${rqHdr}</tbody></table></div>` : ''}
+                    ${rsHdr ? `<div class="hdr-blk">
+                        <div class="hdr-lbl">Response Headers</div>
+                        <table class="hdrt"><thead><tr><th>Key</th><th>Value</th></tr></thead>
+                        <tbody>${rsHdr}</tbody></table></div>` : ''}
                 </div>` : '';
 
             return `
-            <div class="api-block ${apiClass}" id="api-${idx}-${apiIdx}">
-                <div class="api-header" onclick="toggleApi('api-${idx}-${apiIdx}')">
-                    <span class="method-badge ${methodClass}">${escapeHtml(api.method || 'GET')}</span>
-                    <span class="api-name">${escapeHtml(api.apiName || 'Unknown')}</span>
-                    <span class="api-url">${escapeHtml(api.url || '')}</span>
-                    <div class="api-meta">
-                        <span class="status-code ${apiPassed ? 'code-ok' : 'code-err'}">${escapeHtml(String(api.statusCode || ''))}</span>
-                        ${api.responseTime ? `<span class="resp-time">${api.responseTime}ms</span>` : ''}
-                        <span class="api-result ${apiClass}">${api.result || 'UNKNOWN'}</span>
-                        <span class="expand-icon">▼</span>
+            <div class="ab ${acls}" id="ab-${idx}-${ai}">
+                <div class="ah" onclick="toggleApi('ab-${idx}-${ai}')">
+                    <span class="mb ${mcls}">${esc(api.method || 'GET')}</span>
+                    <span class="a-name">${esc(api.apiName || 'Unknown')}</span>
+                    <span class="a-url">${esc(api.url || '')}</span>
+                    <div class="a-meta">
+                        <span class="sc ${aok ? 'sc-ok' : 'sc-err'}">${esc(String(api.statusCode || ''))}</span>
+                        ${api.responseTime ? `<span class="rt">${api.responseTime}ms</span>` : ''}
+                        <span class="a-res ${acls}">${api.result || 'UNKNOWN'}</span>
+                        <span class="arrow">▼</span>
                     </div>
                 </div>
-                <div class="api-body" style="display:none">
-
-                    <div class="tab-bar">
-                        <button class="tab-btn active" onclick="switchTab(this,'assertions-${idx}-${apiIdx}','tab-${idx}-${apiIdx}')">Assertions</button>
-                        <button class="tab-btn" onclick="switchTab(this,'req-body-${idx}-${apiIdx}','tab-${idx}-${apiIdx}')">Request Body</button>
-                        <button class="tab-btn" onclick="switchTab(this,'res-body-${idx}-${apiIdx}','tab-${idx}-${apiIdx}')">Response Body</button>
-                        ${(reqHeaders || resHeaders) ? `<button class="tab-btn" onclick="switchTab(this,'headers-${idx}-${apiIdx}','tab-${idx}-${apiIdx}')">Headers</button>` : ''}
+                <div class="ab-body" style="display:none;">
+                    <div class="tb">
+                        <button class="tbb active" onclick="swTab(this,'asc-${idx}-${ai}','${grp}')">Assertions</button>
+                        <button class="tbb"        onclick="swTab(this,'rqb-${idx}-${ai}','${grp}')">Request Body</button>
+                        <button class="tbb"        onclick="swTab(this,'rsb-${idx}-${ai}','${grp}')">Response Body</button>
+                        ${(rqHdr || rsHdr) ? `<button class="tbb" onclick="swTab(this,'hdr-${idx}-${ai}','${grp}')">Headers</button>` : ''}
                     </div>
-
-                    <div class="tab-content" id="assertions-${idx}-${apiIdx}" data-tab-group="tab-${idx}-${apiIdx}">
-                        ${assertionTable}
-                    </div>
-
-                    <div class="tab-content" id="req-body-${idx}-${apiIdx}" data-tab-group="tab-${idx}-${apiIdx}" style="display:none">
-                        <pre class="code-block">${escapeHtml(formatJson(api.requestBody))}</pre>
-                    </div>
-
-                    <div class="tab-content" id="res-body-${idx}-${apiIdx}" data-tab-group="tab-${idx}-${apiIdx}" style="display:none">
-                        <pre class="code-block">${escapeHtml(formatJson(api.responseBody))}</pre>
-                    </div>
-
-                    ${(reqHeaders || resHeaders) ? `
-                    <div class="tab-content" id="headers-${idx}-${apiIdx}" data-tab-group="tab-${idx}-${apiIdx}" style="display:none">
-                        ${headerTables}
-                    </div>` : ''}
-
+                    <div class="tc" id="asc-${idx}-${ai}" data-grp="${grp}">${assertTbl}</div>
+                    <div class="tc" id="rqb-${idx}-${ai}" data-grp="${grp}" style="display:none;"><pre class="cb">${esc(fmtJson(api.requestBody))}</pre></div>
+                    <div class="tc" id="rsb-${idx}-${ai}" data-grp="${grp}" style="display:none;"><pre class="cb">${esc(fmtJson(api.responseBody))}</pre></div>
+                    ${(rqHdr || rsHdr) ? `<div class="tc" id="hdr-${idx}-${ai}" data-grp="${grp}" style="display:none;">${hdrTab}</div>` : ''}
                 </div>
             </div>`;
         }).join('');
 
         return `
-        <div class="test-panel" id="test-panel-${idx}" style="display:none">
-            <div class="test-panel-header ${statusClass}">
-                <div class="test-panel-title">
-                    <span class="test-status-badge ${statusClass}">${statusLabel}</span>
-                    <span class="test-name">${escapeHtml(iter.testCaseName || `Iteration ${iter.iteration}`)}</span>
+        <div class="tp" id="tp-${idx}" style="display:none;">
+            <div class="tph ${cls}">
+                <div class="tph-left">
+                    <span class="tsb ${cls}">${label}</span>
+                    <span class="t-name">${esc(iter.testCaseName || 'Iteration ' + iter.iteration)}</span>
+                    ${scenarioBadge(iter.scenarioType, 'md')}
                 </div>
-                <div class="test-panel-meta">
-                    <span>Iteration: ${iter.iteration}</span>
-                    <span>${iter.apis.length} API${iter.apis.length !== 1 ? 's' : ''}</span>
+                <div class="tph-right">
+                    <span class="t-meta">Iteration: ${iter.iteration}</span>
+                    <span class="t-meta">${iter.apis.length} API${iter.apis.length !== 1 ? 's' : ''}</span>
+                    <button class="dl-btn" onclick="dlIter(${idx})">⬇&nbsp;Download</button>
                 </div>
             </div>
-            <div class="api-list">
-                ${apiBlocks}
-            </div>
+            <div class="api-list">${apiHtml}</div>
         </div>`;
     }).join('');
 
-    // ── full HTML ───────────────────────────────────────
+    // ── HTML ───────────────────────────────────────────
 
     const html = `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>${escapeHtml(collectionName)} — Extent Report</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${colName} — Extent Report</title>
 <style>
-/* ── reset & base ─────────────────────────────────── */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #333; font-size: 13px; }
-a { text-decoration: none; color: inherit; }
-
-/* ── navbar ───────────────────────────────────────── */
-.navbar {
-    background: #1a1a2e;
-    color: #fff;
-    padding: 0 24px;
-    height: 54px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+/* ── CSS variables ──────────────────────────────────── */
+:root {
+    --bg:         #0d1117;
+    --bg2:        #161b22;
+    --bg3:        #1c2128;
+    --bg4:        #21262d;
+    --border:     #30363d;
+    --text:       #e6edf3;
+    --text2:      #8b949e;
+    --text3:      #6e7681;
+    --nav-bg:     #010409;
+    --card-bg:    #21262d;
+    --panel-bg:   #161b22;
+    --code-bg:    #010409;
+    --code-text:  #e6edf3;
+    --th-bg:      #1c2128;
+    --td-sep:     #21262d;
+    --scrollbar:  #30363d;
+    --tab-active: #58a6ff;
+    --sb-bg:      #161b22;
+    --sb-hover:   #1c2128;
+    --sb-act-p:   rgba(63,185,80,.15);
+    --sb-act-f:   rgba(248,81,73,.15);
+    --btn-bg:     #21262d;
 }
-.navbar-brand { font-size: 17px; font-weight: 700; letter-spacing: 0.5px; }
-.navbar-brand span { color: #4fc3f7; }
-.navbar-meta { font-size: 11px; color: #aaa; display: flex; gap: 20px; }
-.navbar-meta b { color: #ddd; }
-
-/* ── dashboard ────────────────────────────────────── */
-.dashboard {
-    background: #16213e;
-    padding: 20px 24px;
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    flex-wrap: wrap;
-    border-bottom: 1px solid #0f3460;
-}
-.dash-card {
-    background: rgba(255,255,255,0.07);
-    border-radius: 8px;
-    padding: 14px 22px;
-    min-width: 120px;
-    text-align: center;
-    border: 1px solid rgba(255,255,255,0.1);
-}
-.dash-card .dash-num {
-    font-size: 28px;
-    font-weight: 700;
-    line-height: 1;
-}
-.dash-card .dash-label {
-    font-size: 11px;
-    color: #aaa;
-    margin-top: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-.dash-card.total   .dash-num { color: #4fc3f7; }
-.dash-card.passed  .dash-num { color: #66bb6a; }
-.dash-card.failed  .dash-num { color: #ef5350; }
-.dash-card.skipped .dash-num { color: #ffa726; }
-
-.donut-wrap {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-}
-.donut-wrap svg { transform: rotate(-90deg); }
-.donut-labels { color: #eee; }
-.donut-labels .pass-label { color: #66bb6a; font-size: 12px; font-weight: 600; }
-.donut-labels .fail-label { color: #ef5350; font-size: 12px; font-weight: 600; }
-.donut-labels .rate { font-size: 22px; font-weight: 700; color: #fff; }
-
-.meta-strip {
-    background: #0f3460;
-    color: #ccc;
-    font-size: 11px;
-    padding: 8px 24px;
-    display: flex;
-    gap: 30px;
-    flex-wrap: wrap;
-    border-bottom: 1px solid #16213e;
-}
-.meta-strip b { color: #fff; }
-
-/* ── main layout ──────────────────────────────────── */
-.main {
-    display: flex;
-    height: calc(100vh - 54px - 92px - 32px);
-    min-height: 500px;
+[data-theme="light"] {
+    --bg:         #f6f8fa;
+    --bg2:        #ffffff;
+    --bg3:        #f0f2f5;
+    --bg4:        #e8ecef;
+    --border:     #d0d7de;
+    --text:       #1f2328;
+    --text2:      #656d76;
+    --text3:      #8c959f;
+    --nav-bg:     #24292f;
+    --card-bg:    #f6f8fa;
+    --panel-bg:   #ffffff;
+    --code-bg:    #1f2328;
+    --code-text:  #e6edf3;
+    --th-bg:      #f0f2f5;
+    --td-sep:     #eaeef2;
+    --scrollbar:  #d0d7de;
+    --tab-active: #0969da;
+    --sb-bg:      #ffffff;
+    --sb-hover:   #f6f8fa;
+    --sb-act-p:   rgba(31,136,61,.12);
+    --sb-act-f:   rgba(207,34,46,.1);
+    --btn-bg:     #f0f2f5;
 }
 
-/* ── sidebar ──────────────────────────────────────── */
-.sidebar {
-    width: 280px;
-    min-width: 220px;
-    background: #fff;
-    border-right: 1px solid #e0e0e0;
-    overflow-y: auto;
-    flex-shrink: 0;
-}
-.sidebar-section-title {
-    padding: 12px 16px 8px;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: #888;
-    border-bottom: 1px solid #f0f0f0;
-    background: #fafafa;
-    position: sticky;
-    top: 0;
-}
-.sidebar-item {
-    padding: 10px 16px;
-    cursor: pointer;
-    border-bottom: 1px solid #f5f5f5;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    transition: background 0.15s;
-}
-.sidebar-item:hover { background: #f5f5f5; }
-.sidebar-item.active { background: #e8f5e9; border-left: 3px solid #43a047; }
-.sidebar-item.fail.active { background: #ffebee; border-left: 3px solid #e53935; }
-.sidebar-icon { font-size: 12px; width: 16px; text-align: center; flex-shrink: 0; }
-.sidebar-item.pass .sidebar-icon { color: #43a047; }
-.sidebar-item.fail .sidebar-icon { color: #e53935; }
-.sidebar-name { flex: 1; font-size: 12px; word-break: break-word; line-height: 1.3; }
-.sidebar-iter { font-size: 10px; color: #aaa; flex-shrink: 0; }
+/* ── reset ──────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:13px;transition:background .2s,color .2s;}
 
-/* ── content area ─────────────────────────────────── */
-.content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 20px;
-    background: #f0f2f5;
-}
-.placeholder {
-    text-align: center;
-    color: #bbb;
-    margin-top: 80px;
-    font-size: 15px;
-}
-.placeholder .ph-icon { font-size: 48px; margin-bottom: 12px; }
+/* ── navbar ─────────────────────────────────────────── */
+.nav{background:var(--nav-bg);color:#fff;height:52px;padding:0 18px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:300;box-shadow:0 1px 0 rgba(255,255,255,.08);}
+.nav-brand{font-size:16px;font-weight:700;letter-spacing:.3px;white-space:nowrap;}
+.nav-brand span{color:#58a6ff;}
+.nav-right{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+.nav-meta{font-size:11px;color:#8b949e;display:flex;gap:14px;flex-wrap:wrap;}
+.nav-meta b{color:#cdd9e5;}
 
-/* ── test panel ───────────────────────────────────── */
-.test-panel-header {
-    border-radius: 8px 8px 0 0;
-    padding: 14px 18px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-.test-panel-header.pass { background: #e8f5e9; border-left: 4px solid #43a047; }
-.test-panel-header.fail { background: #ffebee; border-left: 4px solid #e53935; }
-.test-panel-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.test-name { font-size: 15px; font-weight: 600; color: #222; }
-.test-status-badge {
-    padding: 3px 10px;
-    border-radius: 3px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-}
-.test-status-badge.pass { background: #43a047; color: #fff; }
-.test-status-badge.fail { background: #e53935; color: #fff; }
-.test-panel-meta { font-size: 11px; color: #888; display: flex; gap: 14px; }
+/* ── theme toggle ───────────────────────────────────── */
+.theme-btn{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:20px;padding:4px 12px 4px 8px;cursor:pointer;font-size:11px;color:#cdd9e5;display:flex;align-items:center;gap:5px;white-space:nowrap;transition:background .15s;}
+.theme-btn:hover{background:rgba(255,255,255,.15);}
 
-.api-list { background: #fff; border-radius: 0 0 8px 8px; border: 1px solid #e0e0e0; border-top: none; }
+/* ── dashboard ──────────────────────────────────────── */
+.dash{background:var(--bg);padding:14px 18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid var(--border);}
+.dc{background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:11px 16px;min-width:100px;text-align:center;}
+.dc-n{font-size:24px;font-weight:700;line-height:1;}
+.dc-l{font-size:10px;color:var(--text2);margin-top:3px;text-transform:uppercase;letter-spacing:.4px;}
+.dc.tot .dc-n{color:#58a6ff;}
+.dc.pas .dc-n{color:#3fb950;}
+.dc.fai .dc-n{color:#f85149;}
+.donut-wrap{margin-left:auto;display:flex;align-items:center;gap:12px;}
+.donut-wrap svg{transform:rotate(-90deg);}
+.di .rate{font-size:19px;font-weight:700;color:var(--text);}
+.di .pl{color:#3fb950;font-size:11px;font-weight:600;}
+.di .fl{color:#f85149;font-size:11px;font-weight:600;}
 
-/* ── api block ────────────────────────────────────── */
-.api-block { border-bottom: 1px solid #f0f0f0; }
-.api-block:last-child { border-bottom: none; }
-.api-header {
-    padding: 10px 16px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    cursor: pointer;
-    transition: background 0.15s;
-    flex-wrap: wrap;
-}
-.api-header:hover { background: #fafafa; }
-.api-block.pass .api-header { border-left: 3px solid #43a047; }
-.api-block.fail .api-header { border-left: 3px solid #e53935; }
+/* ── meta strip ─────────────────────────────────────── */
+.ms{background:var(--bg2);border-bottom:1px solid var(--border);padding:6px 18px;display:flex;gap:22px;font-size:11px;color:var(--text2);flex-wrap:wrap;}
+.ms b{color:var(--text);}
 
-.method-badge {
-    font-size: 10px;
-    font-weight: 700;
-    padding: 2px 7px;
-    border-radius: 3px;
-    letter-spacing: 0.5px;
-    flex-shrink: 0;
-}
-.method-badge.get    { background: #e3f2fd; color: #1565c0; }
-.method-badge.post   { background: #e8f5e9; color: #2e7d32; }
-.method-badge.put    { background: #fff8e1; color: #f57f17; }
-.method-badge.patch  { background: #fce4ec; color: #880e4f; }
-.method-badge.delete { background: #ffebee; color: #b71c1c; }
+/* ── layout ─────────────────────────────────────────── */
+.layout{display:flex;height:calc(100vh - 52px - 74px - 28px);min-height:460px;}
 
-.api-name { font-weight: 600; font-size: 13px; }
-.api-url  { font-size: 11px; color: #888; flex: 1; word-break: break-all; }
-.api-meta { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-shrink: 0; }
+/* ── sidebar ────────────────────────────────────────── */
+.sidebar{width:268px;min-width:190px;background:var(--sb-bg);border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0;display:flex;flex-direction:column;}
+.sb-hdr{padding:9px 13px 7px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--sb-bg);z-index:1;}
+.si{padding:9px 13px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:7px;transition:background .1s;}
+.si:hover{background:var(--sb-hover);}
+.si.pass.active{background:var(--sb-act-p);border-left:3px solid #3fb950;}
+.si.fail.active{background:var(--sb-act-f);border-left:3px solid #f85149;}
+.si-ico{font-size:11px;margin-top:2px;flex-shrink:0;}
+.si.pass .si-ico{color:#3fb950;}
+.si.fail .si-ico{color:#f85149;}
+.si-body{flex:1;min-width:0;}
+.si-name{font-size:12px;word-break:break-word;line-height:1.3;display:block;color:var(--text);}
+.si-row2{display:flex;align-items:center;gap:5px;margin-top:3px;flex-wrap:wrap;}
+.si-iter{font-size:10px;color:var(--text3);}
 
-.status-code {
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 7px;
-    border-radius: 3px;
-}
-.status-code.code-ok  { background: #e8f5e9; color: #2e7d32; }
-.status-code.code-err { background: #ffebee; color: #c62828; }
+/* ── scenario badge ─────────────────────────────────── */
+.sc-badge{font-weight:700;padding:2px 6px;border-radius:3px;letter-spacing:.3px;text-transform:uppercase;display:inline-block;}
+.sc-pos{background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.3);}
+.sc-neg{background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.3);}
+.sc-oth{background:rgba(139,148,158,.15);color:#8b949e;border:1px solid rgba(139,148,158,.3);}
 
-.resp-time { font-size: 10px; color: #999; }
+/* ── content pane ───────────────────────────────────── */
+.ct{flex:1;overflow-y:auto;padding:14px;background:var(--bg);}
+.ph{text-align:center;color:var(--text3);margin-top:80px;font-size:14px;}
+.ph-ico{font-size:44px;margin-bottom:10px;}
 
-.api-result {
-    font-size: 10px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 3px;
-}
-.api-result.pass { background: #43a047; color: #fff; }
-.api-result.fail { background: #e53935; color: #fff; }
+/* ── test panel ─────────────────────────────────────── */
+.tp{border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+.tph{padding:12px 15px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+.tph.pass{background:rgba(63,185,80,.07);border-left:4px solid #3fb950;}
+.tph.fail{background:rgba(248,81,73,.07);border-left:4px solid #f85149;}
+.tph-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.tph-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.t-name{font-size:14px;font-weight:600;color:var(--text);}
+.tsb{padding:2px 9px;border-radius:3px;font-size:10px;font-weight:700;letter-spacing:.4px;}
+.tsb.pass{background:#3fb950;color:#fff;}
+.tsb.fail{background:#f85149;color:#fff;}
+.t-meta{font-size:11px;color:var(--text2);}
 
-.expand-icon { color: #bbb; font-size: 10px; transition: transform 0.2s; }
-.expanded .expand-icon { transform: rotate(180deg); }
+/* ── download button ────────────────────────────────── */
+.dl-btn{background:var(--btn-bg);border:1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text);transition:all .12s;white-space:nowrap;}
+.dl-btn:hover{background:var(--bg4);}
 
-/* ── api body / tabs ──────────────────────────────── */
-.api-body { padding: 0 16px 14px; border-top: 1px solid #f5f5f5; }
+/* ── api list ───────────────────────────────────────── */
+.api-list{background:var(--panel-bg);}
+.ab{border-bottom:1px solid var(--border);}
+.ab:last-child{border-bottom:none;}
+.ab.pass .ah{border-left:3px solid #3fb950;}
+.ab.fail .ah{border-left:3px solid #f85149;}
+.ah{padding:9px 14px;display:flex;align-items:center;gap:8px;cursor:pointer;transition:background .1s;flex-wrap:wrap;}
+.ah:hover{background:var(--bg3);}
+.ah.open .arrow{transform:rotate(180deg);}
 
-.tab-bar {
-    display: flex;
-    gap: 4px;
-    padding: 10px 0 6px;
-    border-bottom: 1px solid #e8e8e8;
-    flex-wrap: wrap;
-}
-.tab-btn {
-    background: none;
-    border: 1px solid #e0e0e0;
-    border-radius: 4px 4px 0 0;
-    padding: 5px 12px;
-    font-size: 11px;
-    cursor: pointer;
-    color: #666;
-    transition: all 0.15s;
-}
-.tab-btn:hover { background: #f5f5f5; }
-.tab-btn.active { background: #1a1a2e; color: #fff; border-color: #1a1a2e; }
+/* ── method badge ───────────────────────────────────── */
+.mb{font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;letter-spacing:.4px;flex-shrink:0;text-transform:uppercase;}
+.mb.get   {background:rgba(88,166,255,.15);color:#58a6ff;}
+.mb.post  {background:rgba(63,185,80,.15);color:#3fb950;}
+.mb.put   {background:rgba(255,166,77,.15);color:#ffa64d;}
+.mb.patch {background:rgba(188,140,255,.15);color:#bc8cff;}
+.mb.delete{background:rgba(248,81,73,.15);color:#f85149;}
 
-/* ── assertions table ─────────────────────────────── */
-.assert-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 10px;
-    font-size: 12px;
-}
-.assert-table th {
-    background: #f5f5f5;
-    padding: 6px 10px;
-    text-align: left;
-    font-weight: 600;
-    color: #555;
-    border-bottom: 2px solid #e0e0e0;
-}
-.assert-table td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
-.assert-pass td:first-child { color: #43a047; }
-.assert-fail td:first-child { color: #e53935; }
-.assert-fail { background: #fff8f8; }
-.assert-icon { font-size: 12px; }
-.assert-error { color: #c62828; font-size: 11px; font-family: monospace; }
-.badge-pass { background: #e8f5e9; color: #2e7d32; padding: 2px 8px; border-radius: 3px; font-size: 10px; font-weight: 700; }
-.badge-fail { background: #ffebee; color: #c62828; padding: 2px 8px; border-radius: 3px; font-size: 10px; font-weight: 700; }
-.no-assertions { color: #aaa; font-size: 12px; padding: 12px 0; font-style: italic; }
+.a-name{font-weight:600;font-size:13px;color:var(--text);}
+.a-url{font-size:10px;color:var(--text2);flex:1;word-break:break-all;}
+.a-meta{display:flex;align-items:center;gap:7px;margin-left:auto;flex-shrink:0;}
+.sc{font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;}
+.sc-ok {background:rgba(63,185,80,.15);color:#3fb950;}
+.sc-err{background:rgba(248,81,73,.15);color:#f85149;}
+.rt{font-size:10px;color:var(--text3);}
+.a-res{font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;}
+.a-res.pass{background:#3fb950;color:#fff;}
+.a-res.fail{background:#f85149;color:#fff;}
+.arrow{color:var(--text3);font-size:9px;transition:transform .18s;}
 
-/* ── code block ───────────────────────────────────── */
-.code-block {
-    background: #1e1e1e;
-    color: #d4d4d4;
-    padding: 14px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-family: 'Courier New', Consolas, monospace;
-    overflow-x: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-    margin-top: 10px;
-    line-height: 1.5;
-    max-height: 400px;
-    overflow-y: auto;
-}
+/* ── api body ───────────────────────────────────────── */
+.ab-body{padding:0 14px 12px;border-top:1px solid var(--border);}
+.tb{display:flex;gap:3px;padding:8px 0 5px;flex-wrap:wrap;border-bottom:1px solid var(--border);}
+.tbb{background:none;border:1px solid var(--border);border-radius:4px 4px 0 0;padding:4px 11px;font-size:11px;cursor:pointer;color:var(--text2);transition:all .1s;}
+.tbb:hover{background:var(--bg3);}
+.tbb.active{background:var(--tab-active);color:#fff;border-color:var(--tab-active);}
+.tc{padding-top:8px;}
 
-/* ── header tables ────────────────────────────────── */
-.headers-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
-.header-block { flex: 1; min-width: 280px; }
-.block-label { font-size: 11px; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
-.header-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-.header-table th { background: #f5f5f5; padding: 5px 10px; text-align: left; font-weight: 600; border-bottom: 1px solid #e0e0e0; }
-.header-table td { padding: 5px 10px; border-bottom: 1px solid #f5f5f5; word-break: break-all; }
+/* ── assertions ─────────────────────────────────────── */
+.atbl{width:100%;border-collapse:collapse;font-size:12px;}
+.atbl th{background:var(--th-bg);padding:5px 9px;text-align:left;font-weight:600;color:var(--text2);border-bottom:2px solid var(--border);}
+.atbl td{padding:6px 9px;border-bottom:1px solid var(--td-sep);vertical-align:top;color:var(--text);}
+.arow-p .ai{color:#3fb950;}
+.arow-f .ai{color:#f85149;}
+.arow-f{background:rgba(248,81,73,.04);}
+.a-err{color:#f85149;font-size:11px;font-family:'Courier New',monospace;}
+.b-pass{background:rgba(63,185,80,.15);color:#3fb950;padding:1px 7px;border-radius:3px;font-size:10px;font-weight:700;}
+.b-fail{background:rgba(248,81,73,.15);color:#f85149;padding:1px 7px;border-radius:3px;font-size:10px;font-weight:700;}
+.no-assert{color:var(--text3);font-size:12px;padding:10px 0;font-style:italic;}
 
-/* ── scrollbar ────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #f5f5f5; }
-::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #aaa; }
+/* ── code block ─────────────────────────────────────── */
+.cb{background:var(--code-bg);color:var(--code-text);padding:12px;border-radius:4px;font-size:11px;font-family:'Courier New',Consolas,monospace;overflow-x:auto;white-space:pre-wrap;word-break:break-word;line-height:1.5;max-height:360px;overflow-y:auto;border:1px solid var(--border);}
+
+/* ── headers ────────────────────────────────────────── */
+.hdr-row{display:flex;gap:12px;flex-wrap:wrap;}
+.hdr-blk{flex:1;min-width:240px;}
+.hdr-lbl{font-size:10px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;}
+.hdrt{width:100%;border-collapse:collapse;font-size:11px;}
+.hdrt th{background:var(--th-bg);padding:4px 9px;text-align:left;font-weight:600;border-bottom:1px solid var(--border);color:var(--text2);}
+.hdrt td{padding:4px 9px;border-bottom:1px solid var(--td-sep);word-break:break-all;color:var(--text);}
+
+/* ── scrollbar ──────────────────────────────────────── */
+::-webkit-scrollbar{width:5px;height:5px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:3px;}
 </style>
 </head>
 <body>
 
 <!-- NAVBAR -->
-<div class="navbar">
-    <div class="navbar-brand">⚡ <span>Extent</span> Report</div>
-    <div class="navbar-meta">
-        <span><b>Collection:</b> ${escapeHtml(collectionName)}</span>
-        <span><b>Folder:</b> ${escapeHtml(folderName)}</span>
-        <span><b>Generated:</b> ${new Date().toLocaleString()}</span>
+<div class="nav">
+    <div class="nav-brand">⚡ <span>Extent</span>&nbsp;Report</div>
+    <div class="nav-right">
+        <div class="nav-meta">
+            <span><b>Collection:</b> ${colName}</span>
+            <span><b>Folder:</b> ${folName}</span>
+            <span><b>Generated:</b> ${new Date().toLocaleString()}</span>
+        </div>
+        <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">
+            <span id="theme-ico">☀️</span><span id="theme-lbl">Light Mode</span>
+        </button>
     </div>
 </div>
 
 <!-- DASHBOARD -->
-<div class="dashboard">
-    <div class="dash-card total">
-        <div class="dash-num">${totalIterations}</div>
-        <div class="dash-label">Total Tests</div>
-    </div>
-    <div class="dash-card passed">
-        <div class="dash-num">${passedIterations}</div>
-        <div class="dash-label">Passed</div>
-    </div>
-    <div class="dash-card failed">
-        <div class="dash-num">${failedIterations}</div>
-        <div class="dash-label">Failed</div>
-    </div>
-    <div class="dash-card total">
-        <div class="dash-num">${totalApis}</div>
-        <div class="dash-label">Total APIs</div>
-    </div>
-    <div class="dash-card total">
-        <div class="dash-num">${totalAssertions}</div>
-        <div class="dash-label">Assertions</div>
-    </div>
-    <div class="dash-card passed">
-        <div class="dash-num">${passedAssertions}</div>
-        <div class="dash-label">Assert Passed</div>
-    </div>
-    <div class="dash-card failed">
-        <div class="dash-num">${failedAssertions}</div>
-        <div class="dash-label">Assert Failed</div>
-    </div>
-
+<div class="dash">
+    <div class="dc tot"><div class="dc-n">${total}</div><div class="dc-l">Total</div></div>
+    <div class="dc pas"><div class="dc-n">${passed}</div><div class="dc-l">Passed</div></div>
+    <div class="dc fai"><div class="dc-n">${failed}</div><div class="dc-l">Failed</div></div>
+    <div class="dc tot"><div class="dc-n">${totalApis}</div><div class="dc-l">APIs</div></div>
+    <div class="dc tot"><div class="dc-n">${totalAssert}</div><div class="dc-l">Assertions</div></div>
+    <div class="dc pas"><div class="dc-n">${passAssert}</div><div class="dc-l">Assert Pass</div></div>
+    <div class="dc fai"><div class="dc-n">${failAssert}</div><div class="dc-l">Assert Fail</div></div>
     <div class="donut-wrap">
-        <svg width="80" height="80" viewBox="0 0 90 90">
-            <circle cx="45" cy="45" r="40" fill="none" stroke="#ef5350" stroke-width="10"/>
-            <circle cx="45" cy="45" r="40" fill="none" stroke="#66bb6a" stroke-width="10"
-                stroke-dasharray="${donutPass} ${donutFail}"
-                stroke-dashoffset="0"/>
+        <svg width="72" height="72" viewBox="0 0 90 90">
+            <circle cx="45" cy="45" r="40" fill="none" stroke="#f85149" stroke-width="10"/>
+            <circle cx="45" cy="45" r="40" fill="none" stroke="#3fb950" stroke-width="10"
+                stroke-dasharray="${donutPass} ${donutFail}"/>
         </svg>
-        <div class="donut-labels">
+        <div class="di">
             <div class="rate">${passRate}%</div>
-            <div class="pass-label">✔ ${passedIterations} Passed</div>
-            <div class="fail-label">✖ ${failedIterations} Failed</div>
+            <div class="pl">✔ ${passed} Passed</div>
+            <div class="fl">✖ ${failed} Failed</div>
         </div>
     </div>
 </div>
 
 <!-- META STRIP -->
-<div class="meta-strip">
-    <span><b>Start:</b> ${startTime}</span>
-    <span><b>End:</b> ${endTime}</span>
-    <span><b>Duration:</b> ${duration}</span>
+<div class="ms">
+    <span><b>Start:</b> ${startStr}</span>
+    <span><b>End:</b> ${endStr}</span>
+    <span><b>Duration:</b> ${durStr}</span>
     <span><b>Pass Rate:</b> ${passRate}%</span>
 </div>
 
-<!-- MAIN -->
-<div class="main">
+<!-- LAYOUT -->
+<div class="layout">
 
     <!-- SIDEBAR -->
     <div class="sidebar">
-        <div class="sidebar-section-title">Test Cases</div>
-        ${sidebarItems}
+        <div class="sb-hdr">Test Cases (${total})</div>
+        ${sidebarHtml}
     </div>
 
     <!-- CONTENT -->
-    <div class="content" id="content">
-        <div class="placeholder" id="placeholder">
-            <div class="ph-icon">📋</div>
+    <div class="ct" id="ct">
+        <div class="ph" id="ph">
+            <div class="ph-ico">📋</div>
             <div>Select a test case from the left to view details</div>
         </div>
-        ${testPanels}
+        ${panelsHtml}
     </div>
 
 </div>
 
 <script>
-var activeIdx = null;
+// ── download data ───────────────────────────────────────
+var DL = [${dlPayloads.map(p => '`' + p + '`').join(',')}];
+var DN = ${JSON.stringify(dlNames)};
 
+// ── theme ───────────────────────────────────────────────
+function toggleTheme() {
+    var html = document.documentElement;
+    var ico  = document.getElementById('theme-ico');
+    var lbl  = document.getElementById('theme-lbl');
+    var isDark = html.getAttribute('data-theme') === 'dark';
+    html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    ico.textContent = isDark ? '🌙' : '☀️';
+    lbl.textContent = isDark ? 'Dark Mode' : 'Light Mode';
+    try { localStorage.setItem('er-theme', isDark ? 'light' : 'dark'); } catch(e) {}
+}
+(function() {
+    try {
+        var s = localStorage.getItem('er-theme');
+        if (s === 'light') {
+            document.documentElement.setAttribute('data-theme', 'light');
+            document.getElementById('theme-ico').textContent = '🌙';
+            document.getElementById('theme-lbl').textContent = 'Dark Mode';
+        }
+    } catch(e) {}
+})();
+
+// ── sidebar navigation ──────────────────────────────────
 function showTest(idx) {
-
-    // hide placeholder
-    document.getElementById('placeholder').style.display = 'none';
-
-    // hide all panels
-    document.querySelectorAll('.test-panel').forEach(function(p) {
-        p.style.display = 'none';
-    });
-
-    // deactivate all sidebar items
-    document.querySelectorAll('.sidebar-item').forEach(function(s) {
-        s.classList.remove('active');
-    });
-
-    // show selected
-    document.getElementById('test-panel-' + idx).style.display = 'block';
-    document.getElementById('sidebar-' + idx).classList.add('active');
-
-    activeIdx = idx;
-
-    // scroll content to top
-    document.getElementById('content').scrollTop = 0;
+    document.getElementById('ph').style.display = 'none';
+    document.querySelectorAll('.tp').forEach(function(p) { p.style.display = 'none'; });
+    document.querySelectorAll('.si').forEach(function(s) { s.classList.remove('active'); });
+    document.getElementById('tp-' + idx).style.display = 'block';
+    document.getElementById('si-' + idx).classList.add('active');
+    document.getElementById('ct').scrollTop = 0;
 }
 
+// ── api accordion ───────────────────────────────────────
 function toggleApi(id) {
     var block  = document.getElementById(id);
-    var body   = block.querySelector('.api-body');
-    var header = block.querySelector('.api-header');
-    if (body.style.display === 'none') {
-        body.style.display = 'block';
-        header.classList.add('expanded');
-    } else {
-        body.style.display = 'none';
-        header.classList.remove('expanded');
-    }
+    var body   = block.querySelector('.ab-body');
+    var header = block.querySelector('.ah');
+    var isOpen = body.style.display !== 'none';
+    body.style.display = isOpen ? 'none' : 'block';
+    if (isOpen) { header.classList.remove('open'); }
+    else        { header.classList.add('open');    }
 }
 
-function switchTab(btn, tabId, groupId) {
-    // hide all tabs in group
-    document.querySelectorAll('[data-tab-group="' + groupId + '"]').forEach(function(t) {
+// ── tab switching ───────────────────────────────────────
+function swTab(btn, tabId, grp) {
+    document.querySelectorAll('[data-grp="' + grp + '"]').forEach(function(t) {
         t.style.display = 'none';
     });
-    // deactivate all tab buttons in the same tab-bar
-    btn.closest('.tab-bar').querySelectorAll('.tab-btn').forEach(function(b) {
+    btn.closest('.tb').querySelectorAll('.tbb').forEach(function(b) {
         b.classList.remove('active');
     });
-    // show target + activate button
     document.getElementById(tabId).style.display = 'block';
     btn.classList.add('active');
 }
 
-// auto-select first item
-if (document.querySelector('.sidebar-item')) {
-    showTest(0);
+// ── download iteration ──────────────────────────────────
+function dlIter(idx) {
+    var blob = new Blob([DL[idx]], { type: 'text/plain;charset=utf-8' });
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
+    a.href = url;
+    a.download = DN[idx];
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
-</script>
 
+// auto-select first item
+if (document.querySelector('.si')) { showTest(0); }
+</script>
 </body>
 </html>`;
 
-    // ── write file ──────────────────────────────────────
-
-    const outputFile = path.join(reportFolder, 'extent-report.html');
-    fs.writeFileSync(outputFile, html, 'utf8');
-    console.log(`📊 Extent Report Generated: ${outputFile}`);
+    // ── write ──────────────────────────────────────────
+    const out = path.join(reportFolder, 'extent-report.html');
+    fs.writeFileSync(out, html, 'utf8');
+    console.log(`📊 Extent Report Generated: ${out}`);
 }
 
 module.exports = generateExtentReport;
