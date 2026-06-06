@@ -10,7 +10,8 @@
 #   POSTMAN_API_KEY       → your Postman API key
 #   POSTMAN_COLLECTION_ID → your collection UID
 #
-# Optional SSL secrets (only if sslEnabled=true):
+# Optional SSL secrets (only needed if sslEnabled=true
+# in config/framework.properties):
 #   SSL_CLIENT_CERT  → base64-encoded client-cert.pem
 #   SSL_CLIENT_KEY   → base64-encoded client-key.pem
 #   SSL_PASSPHRASE   → passphrase as plain text
@@ -57,32 +58,41 @@ jobs:
         run: npm install
 
       # ── 4. SSL certificates ───────────────────────────
-      # Decodes base64 secrets to ./certs/ at runtime.
-      # Files exist only for this job — never committed.
+      # Always runs. Inside the script we check whether
+      # SSL_CLIENT_CERT is set — if not, we skip silently.
+      # The secrets context cannot be used in if: conditions
+      # so we pass secrets via env: and check them in bash.
       - name: Restore SSL certificates
-        if: ${{ secrets.SSL_CLIENT_CERT != '' }}
         env:
           SSL_CLIENT_CERT: ${{ secrets.SSL_CLIENT_CERT }}
           SSL_CLIENT_KEY: ${{ secrets.SSL_CLIENT_KEY }}
         run: |
-          mkdir -p certs
-          echo "$SSL_CLIENT_CERT" | base64 --decode > ./certs/client-cert.pem
-          echo "$SSL_CLIENT_KEY"  | base64 --decode > ./certs/client-key.pem
-          echo "SSL certificates restored"
+          if [ -n "$SSL_CLIENT_CERT" ]; then
+            mkdir -p certs
+            echo "$SSL_CLIENT_CERT" | base64 --decode > ./certs/client-cert.pem
+            echo "$SSL_CLIENT_KEY"  | base64 --decode > ./certs/client-key.pem
+            echo "SSL certificates restored"
+          else
+            echo "SSL_CLIENT_CERT not set — skipping certificate restore"
+          fi
 
       # ── 5. SSL passphrase ─────────────────────────────
-      # Patches sslPassphrase in framework.properties.
+      # Always runs. Patches sslPassphrase in
+      # framework.properties only when the secret is set.
       - name: Set SSL passphrase
-        if: ${{ secrets.SSL_PASSPHRASE != '' }}
         env:
           SSL_PASSPHRASE: ${{ secrets.SSL_PASSPHRASE }}
         run: |
-          sed -i "s|sslPassphrase=.*|sslPassphrase=${SSL_PASSPHRASE}|" config/framework.properties
-          echo "SSL passphrase configured"
+          if [ -n "$SSL_PASSPHRASE" ]; then
+            sed -i "s|sslPassphrase=.*|sslPassphrase=${SSL_PASSPHRASE}|" config/framework.properties
+            echo "SSL passphrase configured"
+          else
+            echo "SSL_PASSPHRASE not set — skipping"
+          fi
 
       # ── 6. download collection ────────────────────────
       # Fetches the latest collection JSON from Postman.
-      # Credentials come from secrets — nothing hardcoded.
+      # Credentials are injected from secrets via env vars.
       - name: Download latest collection from Postman
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
@@ -90,8 +100,8 @@ jobs:
         run: node download-collection.js
 
       # ── 7. configure runner.js ────────────────────────
-      # Writes runner.js using node -e to avoid heredoc
-      # variable-expansion conflicts in the YAML runner.
+      # Uses node -e to write runner.js so there are no
+      # bash heredoc / YAML variable expansion conflicts.
       - name: Configure runner.js with workflow inputs
         env:
           FOLDER: ${{ github.event.inputs.folder_name }}
@@ -119,7 +129,8 @@ jobs:
         run: npm test
 
       # ── 9. upload reports ─────────────────────────────
-      # Runs even when tests fail — always upload reports.
+      # Runs even when tests fail so reports are always
+      # available. Retained for 30 days.
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
