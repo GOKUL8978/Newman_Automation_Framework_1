@@ -3,22 +3,50 @@
 #
 # Newman Automation Framework — Manual Trigger Workflow
 #
-# Trigger : Manual only (workflow_dispatch)
-# Run from: GitHub → Actions → Newman API Tests → Run workflow
+# ── PER-PERSON CREDENTIALS ────────────────────────────
+# Each person works on their own branch.
+# Each branch maps to a GitHub Environment that holds
+# that person's own secrets.
 #
-# Required repository secrets:
-#   POSTMAN_API_KEY       → your Postman API key
-#   POSTMAN_COLLECTION_ID → your collection UID
+# HOW TO SET UP:
+#   1. Go to: GitHub repo → Settings → Environments
+#   2. Create one environment per person/branch:
+#        e.g.  "dev-alice", "dev-bob", "feature-checkout"
+#      The environment name must match the branch name
+#      EXACTLY (case-sensitive).
+#   3. In each environment add these secrets:
 #
-# Optional SSL secrets (only needed if sslEnabled=true
-# in config/framework.properties):
-#   SSL_CLIENT_CERT  → base64-encoded client-cert.pem
-#   SSL_CLIENT_KEY   → base64-encoded client-key.pem
-#   SSL_PASSPHRASE   → passphrase as plain text
+#      Required:
+#        POSTMAN_API_KEY       → that person's Postman key
+#        POSTMAN_COLLECTION_ID → that person's collection UID
 #
-# How to base64-encode cert files:
-#   Mac/Linux : base64 -i ./certs/client-cert.pem
-#   PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes(".\certs\client-cert.pem"))
+#      Optional SSL (only if sslEnabled=true):
+#        SSL_CLIENT_CERT  → base64-encoded client-cert.pem
+#        SSL_CLIENT_KEY   → base64-encoded client-key.pem
+#        SSL_PASSPHRASE   → passphrase as plain text
+#
+#   4. When the workflow runs on branch "dev-alice" it
+#      automatically uses the "dev-alice" environment
+#      secrets — no changes to this file needed.
+#
+#   5. For branches with no matching environment the
+#      workflow falls back to repository-level secrets
+#      (Settings → Secrets and variables → Actions).
+#      Set defaults there for shared/main branch use.
+#
+# ── FALLBACK COLLECTION ───────────────────────────────
+# If the Postman API fetch fails (network issue, wrong
+# key etc.) the workflow continues using the last
+# committed collection/live-collection.json.
+# If that file also does not exist the workflow fails
+# with a clear error message.
+#
+# ── REPORTS ──────────────────────────────────────────
+# Generated reports are committed back to the repo
+# under reports/<branch>/<run-number>/ and also
+# uploaded as a downloadable artifact.
+# The reports folder is cleared before each run so
+# old reports from previous runs do not accumulate.
 # ======================================================
 
 name: Newman API Tests
@@ -40,11 +68,23 @@ jobs:
     name: Run Newman Tests
     runs-on: ubuntu-latest
 
+    # ── Use the environment that matches the branch name.
+    # If no matching environment exists GitHub silently
+    # falls back to repository-level secrets.
+    environment: ${{ github.ref_name }}
+
+    # ── Required so this job can commit and push reports.
+    permissions:
+      contents: write
+
     steps:
 
       # ── 1. checkout ───────────────────────────────────
+      # fetch-depth: 0 so we can push back to the branch.
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # ── 2. node ───────────────────────────────────────
       - name: Set up Node.js
@@ -58,10 +98,8 @@ jobs:
         run: npm install
 
       # ── 4. SSL certificates ───────────────────────────
-      # Always runs. Inside the script we check whether
-      # SSL_CLIENT_CERT is set — if not, we skip silently.
-      # The secrets context cannot be used in if: conditions
-      # so we pass secrets via env: and check them in bash.
+      # Secrets come from the branch environment.
+      # If no SSL secrets are set this step skips silently.
       - name: Restore SSL certificates
         env:
           SSL_CLIENT_CERT: ${{ secrets.SSL_CLIENT_CERT }}
@@ -71,37 +109,74 @@ jobs:
             mkdir -p certs
             echo "$SSL_CLIENT_CERT" | base64 --decode > ./certs/client-cert.pem
             echo "$SSL_CLIENT_KEY"  | base64 --decode > ./certs/client-key.pem
-            echo "SSL certificates restored"
+            echo "✅ SSL certificates restored for branch: ${{ github.ref_name }}"
           else
-            echo "SSL_CLIENT_CERT not set — skipping certificate restore"
+            echo "ℹ️  No SSL_CLIENT_CERT in environment '${{ github.ref_name }}' — skipping"
           fi
 
       # ── 5. SSL passphrase ─────────────────────────────
-      # Always runs. Patches sslPassphrase in
-      # framework.properties only when the secret is set.
       - name: Set SSL passphrase
         env:
           SSL_PASSPHRASE: ${{ secrets.SSL_PASSPHRASE }}
         run: |
           if [ -n "$SSL_PASSPHRASE" ]; then
             sed -i "s|sslPassphrase=.*|sslPassphrase=${SSL_PASSPHRASE}|" config/framework.properties
-            echo "SSL passphrase configured"
+            echo "✅ SSL passphrase configured"
           else
-            echo "SSL_PASSPHRASE not set — skipping"
+            echo "ℹ️  No SSL_PASSPHRASE set — skipping"
           fi
 
-      # ── 6. download collection ────────────────────────
-      # Fetches the latest collection JSON from Postman.
-      # Credentials are injected from secrets via env vars.
+      # ── 6. download latest collection from Postman ────
+      # continue-on-error: true means the workflow keeps
+      # going even if this step fails.
+      # The next step checks whether it succeeded.
       - name: Download latest collection from Postman
+        id: fetch_collection
+        continue-on-error: true
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
           POSTMAN_COLLECTION_ID: ${{ secrets.POSTMAN_COLLECTION_ID }}
         run: node download-collection.js
 
-      # ── 7. configure runner.js ────────────────────────
-      # Uses node -e to write runner.js so there are no
-      # bash heredoc / YAML variable expansion conflicts.
+      # ── 7. validate collection availability ───────────
+      # If fetch failed, check whether a fallback file
+      # exists from a previous run. If neither exists,
+      # fail with a clear message.
+      - name: Validate collection availability
+        run: |
+          if [ "${{ steps.fetch_collection.outcome }}" = "success" ]; then
+            echo "✅ Using freshly downloaded collection from Postman API"
+
+          elif [ -f "collection/live-collection.json" ]; then
+            echo "⚠️  Postman API fetch failed — using existing collection/live-collection.json"
+            echo "   This collection may not reflect the latest Postman changes."
+            echo "   Reason for fetch failure: check the previous step logs."
+
+          else
+            echo "❌ Postman API fetch failed AND no fallback collection found."
+            echo "   collection/live-collection.json does not exist."
+            echo "   Solutions:"
+            echo "     1. Check your POSTMAN_API_KEY and POSTMAN_COLLECTION_ID"
+            echo "        in the '${{ github.ref_name }}' environment secrets."
+            echo "     2. Run: node download-collection.js  locally and commit"
+            echo "        collection/live-collection.json to this branch."
+            exit 1
+          fi
+
+      # ── 8. clear reports folder ───────────────────────
+      # Deletes all previous reports on this branch before
+      # the new run so the folder stays clean.
+      - name: Clear reports folder
+        run: |
+          if [ -d "reports" ]; then
+            rm -rf reports
+            echo "🗑️  reports/ folder cleared"
+          else
+            echo "ℹ️  reports/ folder does not exist yet — nothing to clear"
+          fi
+          mkdir -p reports
+
+      # ── 9. configure runner.js ────────────────────────
       - name: Configure runner.js with workflow inputs
         env:
           FOLDER: ${{ github.event.inputs.folder_name }}
@@ -124,14 +199,37 @@ jobs:
             console.log('runner.js written — folder=' + folderJs + ' iterations=' + iterJs);
           "
 
-      # ── 8. run tests ──────────────────────────────────
+      # ── 10. run tests ─────────────────────────────────
       - name: Run Newman tests
         run: npm test
 
-      # ── 9. upload reports ─────────────────────────────
-      # Runs even when tests fail so reports are always
-      # available. Retained for 30 days.
-      - name: Upload test reports
+      # ── 11. commit reports to repo ────────────────────
+      # Pushes the generated reports/ folder back to the
+      # same branch the workflow ran on.
+      # Runs with if: always() so reports are committed
+      # even when tests fail — evidence of failures matters.
+      - name: Commit and push reports
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name  "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          git add reports/
+
+          if git diff --cached --quiet; then
+            echo "ℹ️  No report changes to commit"
+          else
+            git commit -m "ci(reports): run #${{ github.run_number }} — branch=${{ github.ref_name }} folder=${{ github.event.inputs.folder_name || 'ROOT' }}"
+            git push origin HEAD:${{ github.ref_name }}
+            echo "✅ Reports pushed to branch: ${{ github.ref_name }}"
+          fi
+
+      # ── 12. upload reports as artifact ────────────────
+      # Kept alongside the commit for easy zip download
+      # directly from the Actions run page.
+      - name: Upload test reports as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -139,16 +237,25 @@ jobs:
           path: reports/
           retention-days: 30
 
-      # ── 10. job summary ───────────────────────────────
+      # ── 13. job summary ───────────────────────────────
       - name: Write job summary
         if: always()
         run: |
+          FETCH_STATUS="${{ steps.fetch_collection.outcome }}"
+          COLLECTION_NOTE=""
+          if [ "$FETCH_STATUS" != "success" ]; then
+            COLLECTION_NOTE=" ⚠️ (used existing fallback)"
+          fi
+
           echo "## Newman Test Run #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Folder | \`${{ github.event.inputs.folder_name || 'ROOT' }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Iterations | \`${{ github.event.inputs.iteration_count || 'ALL' }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Triggered by | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Collection | Fresh from Postman${COLLECTION_NOTE} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Download the full report from the **Artifacts** section below." >> $GITHUB_STEP_SUMMARY
+          echo "Reports committed to branch \`${{ github.ref_name }}\` and available as artifact below." >> $GITHUB_STEP_SUMMARY
