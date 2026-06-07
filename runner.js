@@ -16,7 +16,7 @@
 //   null  -> runs ROOT (all requests, no folder filter)
 
 const folderName =
-    'Create_User';
+    '';
 
 // ======================================================
 // PROVIDE ITERATION COUNT
@@ -29,7 +29,7 @@ const folderName =
 //   1    -> run first row only
 //   5    -> run first 5 rows
 
-const iterationCount = 10;
+const iterationCount = null;
 
 // ======================================================
 // SET ARGUMENTS
