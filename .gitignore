@@ -1,12 +1,6 @@
 # dependencies
 node_modules/
 
-# generated reports — never commit
-reports/
-
-# live collection downloaded from Postman — generated at runtime
-collection/live-collection.json
-
 # certificates — never commit private keys or certs
 certs/
 *.pem
@@ -14,3 +8,9 @@ certs/
 *.crt
 *.p12
 *.pfx
+
+# reports/ and collection/live-collection.json are
+# committed by GitHub Actions — do NOT ignore them here.
+# If you want to keep them local only, uncomment below:
+# reports/
+# collection/live-collection.json
