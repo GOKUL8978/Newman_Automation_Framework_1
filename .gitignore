@@ -1,12 +1,6 @@
 # dependencies
 node_modules/
 
-# generated reports — never commit
-reports/
-
-# live collection downloaded from Postman — generated at runtime
-collection/live-collection.json
-
 # certificates — never commit private keys or certs
 certs/
 *.pem
