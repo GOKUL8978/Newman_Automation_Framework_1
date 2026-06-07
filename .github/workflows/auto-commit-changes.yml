@@ -1,0 +1,114 @@
+# ======================================================
+# .github/workflows/auto-commit-changes.yml
+#
+# Automatically commits and pushes any uncommitted
+# changes to the data/ and collection/ folders.
+#
+# WHY THIS EXISTS:
+# Team members often update test data files (CSV/Excel)
+# or collection JSON locally and forget to commit.
+# This workflow lets them trigger a commit from GitHub
+# without opening a terminal.
+#
+# TRIGGER: Manual only (workflow_dispatch)
+# Run from: GitHub → Actions → Auto-commit Data & Collection
+#
+# WHAT IT COMMITS:
+#   data/        → CSV and Excel test data files
+#   collection/  → collection JSON files
+#
+# WHAT IT NEVER COMMITS:
+#   node_modules/, reports/, certs/, *.pem, *.key
+#   (protected by .gitignore)
+# ======================================================
+
+name: Auto-commit Data & Collection
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_message:
+        description: 'Commit message (leave blank for auto-generated)'
+        required: false
+        default: ''
+
+jobs:
+  auto-commit:
+    name: Commit data and collection changes
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+
+      # ── 1. checkout with full history ─────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 2. check for changes ──────────────────────────
+      - name: Check for changes in data/ and collection/
+        id: check_changes
+        run: |
+          git status --short data/ collection/
+
+          # Count changed files
+          CHANGED=$(git status --short data/ collection/ | wc -l | tr -d ' ')
+          echo "changed_count=${CHANGED}" >> $GITHUB_OUTPUT
+
+          if [ "$CHANGED" -gt "0" ]; then
+            echo "has_changes=true"  >> $GITHUB_OUTPUT
+            echo "📝 Found ${CHANGED} changed file(s) in data/ and/or collection/"
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "✅ No changes found in data/ or collection/ — nothing to commit"
+          fi
+
+      # ── 3. commit and push ────────────────────────────
+      - name: Commit and push changes
+        if: steps.check_changes.outputs.has_changes == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name  "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          # Stage only data/ and collection/ — nothing else
+          git add data/ collection/
+
+          # Build commit message
+          if [ -n "${{ github.event.inputs.commit_message }}" ]; then
+            MSG="${{ github.event.inputs.commit_message }}"
+          else
+            MSG="chore(data): auto-commit data/collection changes — branch=${{ github.ref_name }} by @${{ github.actor }}"
+          fi
+
+          git commit -m "$MSG"
+          git push origin HEAD:${{ github.ref_name }}
+
+          echo "✅ Changes committed and pushed to branch: ${{ github.ref_name }}"
+          echo "   Commit message: $MSG"
+
+      # ── 4. summary ────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          COUNT="${{ steps.check_changes.outputs.changed_count }}"
+          HAS="${{ steps.check_changes.outputs.has_changes }}"
+
+          echo "## Auto-commit: Data & Collection" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Files changed | ${COUNT} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$HAS" = "true" ]; then
+            echo "✅ Changes in \`data/\` and \`collection/\` were committed and pushed." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ No changes found — nothing was committed." >> $GITHUB_STEP_SUMMARY
+          fi
