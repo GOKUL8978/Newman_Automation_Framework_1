@@ -3,16 +3,6 @@ name: Newman API Tests
 on:
   workflow_dispatch:
     inputs:
-      target_env:
-        description: 'Select Environment'
-        required: true
-        type: choice
-        options:
-          - user1
-          - user2
-          - user3
-          - user4
-
       folder_name:
         description: 'Postman folder to run (leave blank for ROOT)'
         required: false
@@ -26,38 +16,48 @@ on:
 jobs:
   run-tests:
     name: Run Newman Tests
+
     runs-on: ubuntu-latest
 
+    # Automatically use environment matching selected branch
     environment:
-      name: ${{ github.event.inputs.target_env }}
+      name: ${{ github.ref_name }}
 
     steps:
 
-      # ---------------------------------------------------
-      # Checkout
-      # ---------------------------------------------------
+      # --------------------------------------------------
+      # Checkout Repository
+      # --------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------------------------------------------------
-      # Node Setup
-      # ---------------------------------------------------
+      # --------------------------------------------------
+      # Display Selected Branch
+      # --------------------------------------------------
+      - name: Display branch information
+        run: |
+          echo "Selected Branch: ${{ github.ref_name }}"
+          echo "Using Environment: ${{ github.ref_name }}"
+
+      # --------------------------------------------------
+      # Setup Node.js
+      # --------------------------------------------------
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
 
-      # ---------------------------------------------------
+      # --------------------------------------------------
       # Install Dependencies
-      # ---------------------------------------------------
+      # --------------------------------------------------
       - name: Install dependencies
         run: npm install
 
-      # ---------------------------------------------------
-      # Debug Secret Loading
-      # ---------------------------------------------------
-      - name: Verify Environment Secrets
+      # --------------------------------------------------
+      # Verify Environment Secrets
+      # --------------------------------------------------
+      - name: Verify environment secrets
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
           POSTMAN_COLLECTION_ID: ${{ secrets.POSTMAN_COLLECTION_ID }}
@@ -65,22 +65,22 @@ jobs:
           echo "Checking environment secrets..."
 
           if [ -z "$POSTMAN_API_KEY" ]; then
-            echo "❌ POSTMAN_API_KEY NOT FOUND"
+            echo "ERROR: POSTMAN_API_KEY not found"
             exit 1
           else
-            echo "✅ POSTMAN_API_KEY Loaded"
+            echo "POSTMAN_API_KEY loaded"
           fi
 
           if [ -z "$POSTMAN_COLLECTION_ID" ]; then
-            echo "❌ POSTMAN_COLLECTION_ID NOT FOUND"
+            echo "ERROR: POSTMAN_COLLECTION_ID not found"
             exit 1
           else
-            echo "✅ POSTMAN_COLLECTION_ID Loaded"
+            echo "POSTMAN_COLLECTION_ID loaded"
           fi
 
-      # ---------------------------------------------------
-      # Restore SSL Certificates
-      # ---------------------------------------------------
+      # --------------------------------------------------
+      # Restore SSL Certificates (Optional)
+      # --------------------------------------------------
       - name: Restore SSL certificates
         env:
           SSL_CLIENT_CERT: ${{ secrets.SSL_CLIENT_CERT }}
@@ -90,77 +90,77 @@ jobs:
             mkdir -p certs
 
             echo "$SSL_CLIENT_CERT" | base64 --decode > certs/client-cert.pem
-            echo "$SSL_CLIENT_KEY"  | base64 --decode > certs/client-key.pem
+            echo "$SSL_CLIENT_KEY" | base64 --decode > certs/client-key.pem
 
-            echo "✅ SSL certificates restored"
+            echo "SSL certificates restored"
           else
-            echo "ℹ️ SSL certificates not configured"
+            echo "SSL certificates not configured"
           fi
 
-      # ---------------------------------------------------
-      # Set SSL Passphrase
-      # ---------------------------------------------------
+      # --------------------------------------------------
+      # Configure SSL Passphrase (Optional)
+      # --------------------------------------------------
       - name: Set SSL passphrase
         env:
           SSL_PASSPHRASE: ${{ secrets.SSL_PASSPHRASE }}
         run: |
           if [ -n "$SSL_PASSPHRASE" ]; then
             sed -i "s|sslPassphrase=.*|sslPassphrase=${SSL_PASSPHRASE}|" config/framework.properties
-            echo "✅ SSL passphrase configured"
+            echo "SSL passphrase configured"
           else
-            echo "ℹ️ SSL passphrase not configured"
+            echo "SSL passphrase not configured"
           fi
 
-      # ---------------------------------------------------
-      # Download Collection
-      # ---------------------------------------------------
+      # --------------------------------------------------
+      # Download Latest Postman Collection
+      # --------------------------------------------------
       - name: Download latest collection from Postman
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
           POSTMAN_COLLECTION_ID: ${{ secrets.POSTMAN_COLLECTION_ID }}
         run: |
-          echo "Downloading collection..."
+          echo "Downloading latest collection..."
           node download-collection.js
 
-      # ---------------------------------------------------
-      # Configure Runner
-      # ---------------------------------------------------
+      # --------------------------------------------------
+      # Generate runner.js
+      # --------------------------------------------------
       - name: Configure runner.js with workflow inputs
         env:
           FOLDER: ${{ github.event.inputs.folder_name }}
           ITERATIONS: ${{ github.event.inputs.iteration_count }}
         run: |
           node -e "
-            const fs = require('fs');
+          const fs = require('fs');
 
-            const folder = process.env.FOLDER || '';
-            const iterations = process.env.ITERATIONS || '';
+          const folder = process.env.FOLDER || '';
+          const iterations = process.env.ITERATIONS || '';
 
-            const content = [
-              '// Auto-generated by GitHub Actions',
-              'const folderName = ' + (folder ? '\'' + folder + '\'' : 'null') + ';',
-              'const iterationCount = ' + (iterations ? iterations : 'null') + ';',
-              'process.argv[2] = folderName;',
-              'process.argv[3] = iterationCount;',
-              'require(\"./scripts/run-tests\");'
-            ].join('\n');
+          const content = [
+            '// Auto-generated by GitHub Actions',
+            'const folderName = ' + (folder ? '\'' + folder + '\'' : 'null') + ';',
+            'const iterationCount = ' + (iterations ? iterations : 'null') + ';',
+            'process.argv[2] = folderName;',
+            'process.argv[3] = iterationCount;',
+            'require(\"./scripts/run-tests\");'
+          ].join('\n');
 
-            fs.writeFileSync('runner.js', content);
+          fs.writeFileSync('runner.js', content);
 
-            console.log('runner.js generated');
-            console.log('Folder:', folder || 'ROOT');
-            console.log('Iterations:', iterations || 'ALL');
+          console.log('runner.js generated');
+          console.log('Folder:', folder || 'ROOT');
+          console.log('Iterations:', iterations || 'ALL');
           "
 
-      # ---------------------------------------------------
+      # --------------------------------------------------
       # Run Newman Tests
-      # ---------------------------------------------------
-      - name: Run Newman Tests
+      # --------------------------------------------------
+      - name: Run Newman tests
         run: npm test
 
-      # ---------------------------------------------------
+      # --------------------------------------------------
       # Upload Reports
-      # ---------------------------------------------------
+      # --------------------------------------------------
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -169,9 +169,9 @@ jobs:
           path: reports/
           retention-days: 30
 
-      # ---------------------------------------------------
-      # Job Summary
-      # ---------------------------------------------------
+      # --------------------------------------------------
+      # Write Job Summary
+      # --------------------------------------------------
       - name: Write job summary
         if: always()
         run: |
@@ -179,9 +179,10 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Environment | \`${{ github.event.inputs.target_env }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Folder | \`${{ github.event.inputs.folder_name || 'ROOT' }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Iterations | \`${{ github.event.inputs.iteration_count || 'ALL' }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Triggered By | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Download reports from the Artifacts section below." >> $GITHUB_STEP_SUMMARY
+          echo "Reports are available in the Artifacts section." >> $GITHUB_STEP_SUMMARY
