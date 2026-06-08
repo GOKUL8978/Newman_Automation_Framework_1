@@ -39,16 +39,6 @@ function generateExtentReport(reportFolder, evidenceData, meta) {
     }
 
     // ── sanitise: remove ghost/unknown API entries ─────
-<<<<<<< Updated upstream
-    // APIs with result === null were captured by the
-    // request event but never matched in Newman's done
-    // event executions (pre-request hooks, out-of-scope
-    // requests, or collection-level scripts).
-    // APIs with result === 'UNKNOWN' and no status code
-    // are the same problem surfaced after fallback.
-    // Strip them here so every downstream use is clean.
-=======
->>>>>>> Stashed changes
     evidenceData = evidenceData.map(function(iter) {
         return Object.assign({}, iter, {
             apis: (iter.apis || []).filter(function(api) {
@@ -64,26 +54,12 @@ function generateExtentReport(reportFolder, evidenceData, meta) {
             })
         });
     });
-<<<<<<< Updated upstream
-
-    // remove iterations that ended up with zero valid APIs
-    evidenceData = evidenceData.filter(function(iter) {
-        return iter.apis.length > 0;
-    });
-
-    if (evidenceData.length === 0) {
-        console.log('⚠️  No valid API data after sanitisation — skipping Extent report');
-        return;
-    }
-
-=======
     evidenceData = evidenceData.filter(function(iter) { return iter.apis.length > 0; });
     if (evidenceData.length === 0) {
         console.log('⚠️  No valid API data after sanitisation — skipping Extent report'); return;
     }
 
     // ── counts ─────────────────────────────────────────
->>>>>>> Stashed changes
     const total  = evidenceData.length;
     const passed = evidenceData.filter(d => !d.apis.some(a => a.result === 'FAILED')).length;
     const failed = total - passed;
@@ -245,24 +221,6 @@ function generateExtentReport(reportFolder, evidenceData, meta) {
                     </div>
                     <div class="tc" id="asc-${idx}-${ai}" data-grp="${grp}">${assertTbl}</div>
                     <div class="tc" id="rqb-${idx}-${ai}" data-grp="${grp}" style="display:none;">
-<<<<<<< Updated upstream
-                        ${(api.requestBody && api.requestBody.trim())
-                            ? `<div class="copy-wrap">
-                                <button class="copy-btn" onclick="copyBody(this)" title="Copy to clipboard">⧉ Copy</button>
-                                <pre class="cb json-body">${esc(fmtJson(api.requestBody))}</pre>
-                               </div>`
-                            : `<p class="no-body-msg">⚠ No request body for this request</p>`
-                        }
-                    </div>
-                    <div class="tc" id="rsb-${idx}-${ai}" data-grp="${grp}" style="display:none;">
-                        ${(api.responseBody && api.responseBody.trim())
-                            ? `<div class="copy-wrap">
-                                <button class="copy-btn" onclick="copyBody(this)" title="Copy to clipboard">⧉ Copy</button>
-                                <pre class="cb json-body">${esc(fmtJson(api.responseBody))}</pre>
-                               </div>`
-                            : `<p class="no-body-msg">⚠ No response body for this request</p>`
-                        }
-=======
                         ${(api.requestBody&&api.requestBody.trim())
                             ?`<div class="copy-wrap"><button class="copy-btn" onclick="copyBody(this)" title="Copy to clipboard">⧉ Copy</button><pre class="cb json-body">${esc(fmtJson(api.requestBody))}</pre></div>`
                             :`<p class="no-body-msg">⚠ No request body for this request</p>`}
@@ -271,7 +229,6 @@ function generateExtentReport(reportFolder, evidenceData, meta) {
                         ${(api.responseBody&&api.responseBody.trim())
                             ?`<div class="copy-wrap"><button class="copy-btn" onclick="copyBody(this)" title="Copy to clipboard">⧉ Copy</button><pre class="cb json-body">${esc(fmtJson(api.responseBody))}</pre></div>`
                             :`<p class="no-body-msg">⚠ No response body for this request</p>`}
->>>>>>> Stashed changes
                     </div>
                     ${(rqHdr||rsHdr)?`<div class="tc" id="hdr-${idx}-${ai}" data-grp="${grp}" style="display:none;">${hdrTab}</div>`:''}
                 </div>
