@@ -60,11 +60,11 @@ const testScenarioTypeColumn =
     (framework.testScenarioTypeColumn || '')
         .trim();
 
-// console.log('\n📋 Framework Configuration');
-// console.log(`   Evidence Format:          ${evidenceFormat.toUpperCase()}`);
-// console.log(`   Copy Test Data:           ${copyTestDataToReports}`);
-// console.log(`   Test Case Name Column:    ${testCaseNameColumn}`);
-// console.log(`   Scenario Type Column:     ${testScenarioTypeColumn || '(not set)'}`);
+console.log('\n📋 Framework Configuration');
+console.log(`   Evidence Format:          ${evidenceFormat.toUpperCase()}`);
+console.log(`   Copy Test Data:           ${copyTestDataToReports}`);
+console.log(`   Test Case Name Column:    ${testCaseNameColumn}`);
+console.log(`   Scenario Type Column:     ${testScenarioTypeColumn || '(not set)'}`);
 
 // ======================================================
 // INPUTS FROM runner.js
@@ -301,7 +301,7 @@ async function main() {
     }
 
     console.log(
-        // `\n📦 Collection loaded: "${liveCollection.info?.name || collectionOutputPath}"` 
+        `\n📦 Collection loaded: "${liveCollection.info?.name || collectionOutputPath}"` +
         `\n🚀 Starting test run: ${targetFolder || 'ROOT'}`
     );
 
@@ -344,12 +344,12 @@ async function main() {
             Number(iterationCount);
 
         console.log(
-            `Running ${iterationCount} iterations`
+            `🔁 Running ${iterationCount} iterations`
         );
 
     } else {
 
-        console.log('Running ALL iterations');
+        console.log('🔁 Running ALL iterations');
     }
 
     // folder filter
@@ -394,7 +394,7 @@ async function main() {
 
             newmanOptions.iterationData = inputFile;
 
-            console.log(`Using CSV File: ${inputFile}`);
+            console.log(`📄 Using CSV File: ${inputFile}`);
         }
 
     } else {
@@ -634,11 +634,16 @@ async function main() {
                     ? (iterationDataRows[iter][testScenarioTypeColumn] || '')
                     : '';
 
+            // Filter out APIs whose result was never set in the done event.
+            // These are ghost entries from pre/post hooks or out-of-scope
+            // requests captured by the request event but not in executions.
             const apis =
-                iterationApiStore[iter].map(api => ({
-                    ...api,
-                    result: api.result || 'UNKNOWN'
-                }));
+                iterationApiStore[iter]
+                    .filter(api => api.result !== null)
+                    .map(api => ({
+                        ...api,
+                        result: api.result || 'UNKNOWN'
+                    }));
 
             evidenceData.push({
                 iteration:    iter,
@@ -708,21 +713,50 @@ async function main() {
 
         const runEndTime = new Date();
 
+        // Resolve attachment paths for Summary page.
+        // Both files must be looked up inside reportFolder:
+        //   - data file: copied there by updateDataFile() above
+        //   - evidence file: written there by generateWordReport/generateTextReport above
+
+        // Data file — find the copied version in reportFolder
+        let summaryDataFile = null;
+        try {
+            const rfiles = fs.readdirSync(reportFolder);
+            const df = rfiles.find(f => f.endsWith('.csv') || f.endsWith('.xlsx'));
+            if (df) summaryDataFile = path.join(reportFolder, df);
+        } catch {}
+
+        // Fall back to original input file if copy not found
+        if (!summaryDataFile && inputFile) {
+            summaryDataFile = path.resolve(inputFile);
+        }
+
+        // Evidence file — written by generateWordReport/generateTextReport above
+        let summaryEvidenceFile = null;
+        try {
+            const rfiles = fs.readdirSync(reportFolder);
+            const ef = rfiles.find(f => f === 'ExecutionEvidence.docx' || f === 'ExecutionEvidence.txt');
+            if (ef) summaryEvidenceFile = path.join(reportFolder, ef);
+        } catch {}
+
         generateExtentReport(
             reportFolder,
             evidenceData,
             {
-                collectionName: liveCollection.info?.name || 'Newman Tests',
-                folderName:     targetFolder || 'ROOT',
-                startTime:      runStartTime,
-                endTime:        runEndTime,
-                totalDuration:  runEndTime - runStartTime
+                collectionName:  liveCollection.info?.name || 'Newman Tests',
+                folderName:      targetFolder || 'ROOT',
+                startTime:       runStartTime,
+                endTime:         runEndTime,
+                totalDuration:   runEndTime - runStartTime,
+                dataFilePath:    summaryDataFile,
+                evidenceFile:    summaryEvidenceFile,
+                evidenceFormat:  evidenceFormat
             }
         );
 
-        console.log('\n Execution Completed....');
-        console.log(`Report:  ${reportFolder}/extent-report.html`);
-        // console.log(`📁 HTML Report:    ${reportFolder}/report.html`);
+        console.log('\n🎉 Execution Completed');
+        console.log(`📁 Extent Report:  ${reportFolder}/extent-report.html`);
+        console.log(`📁 HTML Report:    ${reportFolder}/report.html`);
     });
 }
 
@@ -791,9 +825,9 @@ function updateDataFile(
 
                 fs.copyFileSync(filePath, dest);
 
-                // console.log(
-                //     `📂 Test data copied to reports: ${path.basename(filePath)}`
-                // );
+                console.log(
+                    `📂 Test data copied to reports: ${path.basename(filePath)}`
+                );
 
             } else {
 
@@ -838,7 +872,7 @@ function updateDataFile(
 
                 fs.writeFileSync(filePath, updatedCsv);
 
-                console.log(`Updated CSV: ${filePath}`);
+                console.log(`📄 Updated CSV: ${filePath}`);
 
                 // copy to reports
                 if (copyTestDataToReports) {
@@ -851,9 +885,9 @@ function updateDataFile(
 
                     fs.copyFileSync(filePath, dest);
 
-                    // console.log(
-                    //     `📂 Test data copied to reports: ${path.basename(filePath)}`
-                    // );
+                    console.log(
+                        `📂 Test data copied to reports: ${path.basename(filePath)}`
+                    );
 
                 } else {
 
