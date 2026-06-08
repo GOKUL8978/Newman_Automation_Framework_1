@@ -1,337 +1,9 @@
-// ======================================================
-// scripts/generate-extent-report.js
-// ======================================================
-
-const fs   = require('fs');
-const path = require('path');
-
-function esc(str) {
-    return String(str || '')
-        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-        .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-function escJs(str) {
-    return String(str || '').replace(/\\/g,'\\\\').replace(/`/g,'\\`').replace(/\$/g,'\\$');
-}
-function fmtJson(str) {
-    try { return JSON.stringify(JSON.parse(str), null, 2); } catch { return String(str||''); }
-}
-
-// ── SVG pie helper ─────────────────────────────────────
-function buildPie(num, den, passColor, failColor) {
-    const cx=90, cy=90, r=80;
-    if (den===0) return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#30363d"/>`;
-    if (num===den) return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${passColor}"/>`;
-    if (num===0)   return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${failColor}"/>`;
-    const a = (num/den) * 2 * Math.PI;
-    const x1=cx+r*Math.cos(-Math.PI/2),       y1=cy+r*Math.sin(-Math.PI/2);
-    const x2=cx+r*Math.cos(-Math.PI/2+a),     y2=cy+r*Math.sin(-Math.PI/2+a);
-    const x3=cx+r*Math.cos(-Math.PI/2+a),     y3=cy+r*Math.sin(-Math.PI/2+a);
-    const lg = a>Math.PI ? 1 : 0;
-    return `<path d="M${cx},${cy} L${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r} 0 ${lg},1 ${x2.toFixed(2)},${y2.toFixed(2)} Z" fill="${passColor}"/>` +
-           `<path d="M${cx},${cy} L${x3.toFixed(2)},${y3.toFixed(2)} A${r},${r} 0 ${lg===1?0:1},1 ${x1.toFixed(2)},${y1.toFixed(2)} Z" fill="${failColor}"/>`;
-}
-
-function generateExtentReport(reportFolder, evidenceData, meta) {
-
-    if (!evidenceData || evidenceData.length === 0) {
-        console.log('⚠️  No evidence data for Extent report'); return;
-    }
-
-    // ── sanitise: remove ghost/unknown API entries ─────
-    evidenceData = evidenceData.map(function(iter) {
-        return Object.assign({}, iter, {
-            apis: (iter.apis || []).filter(function(api) {
-                const hasResult =
-                    api.result !== null &&
-                    api.result !== undefined &&
-                    api.result !== 'UNKNOWN';
-                const hasStatus =
-                    api.statusCode !== null &&
-                    api.statusCode !== undefined &&
-                    String(api.statusCode).trim() !== '';
-                return hasResult && hasStatus;
-            })
-        });
-    });
-    evidenceData = evidenceData.filter(function(iter) { return iter.apis.length > 0; });
-    if (evidenceData.length === 0) {
-        console.log('⚠️  No valid API data after sanitisation — skipping Extent report'); return;
-    }
-
-    // ── counts ─────────────────────────────────────────
-    const total  = evidenceData.length;
-    const passed = evidenceData.filter(d => !d.apis.some(a => a.result === 'FAILED')).length;
-    const failed = total - passed;
-    let totalApis=0,passApis=0,failApis=0,totalAssert=0,passAssert=0,failAssert=0;
-    evidenceData.forEach(iter => {
-        iter.apis.forEach(api => {
-            totalApis++; api.result==='PASSED' ? passApis++ : failApis++;
-            (api.assertions||[]).forEach(a => { totalAssert++; a.passed ? passAssert++ : failAssert++; });
-        });
-    });
-    const passRate  = total > 0 ? Math.round((passed/total)*100) : 0;
-    const donutPass = total > 0 ? Math.round((passed/total)*251.2) : 0;
-    const donutFail = 251.2 - donutPass;
-    const startStr  = meta?.startTime    ? new Date(meta.startTime).toLocaleString()   : new Date().toLocaleString();
-    const endStr    = meta?.endTime      ? new Date(meta.endTime).toLocaleString()     : new Date().toLocaleString();
-    const durStr    = meta?.totalDuration ? `${(meta.totalDuration/1000).toFixed(2)}s` : '—';
-    const colName   = esc(meta?.collectionName || 'Newman Tests');
-    const folName   = esc(meta?.folderName     || 'All Tests');
-
-    // ── file attachments (base64) ──────────────────────
-    let dataFileB64='', dataFileName='', dataFileMime='';
-    const _dataPath = (meta && meta.dataFilePath) ? meta.dataFilePath : null;
-    if (_dataPath) {
-        try {
-            if (fs.existsSync(_dataPath)) {
-                const buf = fs.readFileSync(_dataPath);
-                dataFileB64  = buf.toString('base64');
-                dataFileName = path.basename(_dataPath);
-                dataFileMime = _dataPath.endsWith('.xlsx')
-                    ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                    : 'text/csv';
-                console.log(`📎 Data file embedded in report: ${_dataPath}`);
-            } else {
-                console.log(`⚠️  Data file not found for embedding: ${_dataPath}`);
-            }
-        } catch(e) {
-            console.log(`⚠️  Could not embed data file: ${e.message}`);
-        }
-    } else {
-        console.log('ℹ️  No data file path provided — attachment skipped');
-    }
-
-    let evidenceB64='', evidenceFileName='', evidenceMime='';
-    const _evPath = (meta && meta.evidenceFile) ? meta.evidenceFile : null;
-    if (_evPath) {
-        try {
-            if (fs.existsSync(_evPath)) {
-                const buf = fs.readFileSync(_evPath);
-                evidenceB64  = buf.toString('base64');
-                evidenceFileName = path.basename(_evPath);
-                evidenceMime = _evPath.endsWith('.docx')
-                    ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-                    : 'text/plain';
-                console.log(`📎 Evidence file embedded in report: ${_evPath}`);
-            } else {
-                console.log(`⚠️  Evidence file not found for embedding: ${_evPath}`);
-            }
-        } catch(e) {
-            console.log(`⚠️  Could not embed evidence file: ${e.message}`);
-        }
-    } else {
-        console.log('ℹ️  No evidence file path provided — attachment skipped');
-    }
-
-    function scenarioBadge(type, sm) {
-        if (!type||!type.trim()) return '';
-        const t=type.trim();
-        const cls = t.toLowerCase()==='positive'?'sc-pos':t.toLowerCase()==='negative'?'sc-neg':'sc-oth';
-        return `<span class="sc-badge ${cls}" style="font-size:${sm?'9px':'10px'}">${esc(t)}</span>`;
-    }
-
-    // ── download payloads ──────────────────────────────
-    const dlPayloads = evidenceData.map(iter => {
-        const ok=!iter.apis.some(a=>a.result==='FAILED');
-        const L='='.repeat(80), D='-'.repeat(60);
-        let t=`${L}\nTEST CASE NAME : ${iter.testCaseName||'Iteration '+iter.iteration}\nITERATION      : ${iter.iteration}\n`;
-        if(iter.scenarioType) t+=`SCENARIO TYPE  : ${iter.scenarioType}\n`;
-        t+=`OVERALL RESULT : ${ok?'PASSED':'FAILED'}\n${L}\n\n`;
-        iter.apis.forEach((api,i)=>{
-            t+=`${D}\nAPI #${i+1} : ${api.apiName||'Unknown'}\n${D}\n`;
-            t+=`Method : ${api.method||''}\nURL : ${api.url||''}\nStatus : ${api.statusCode||''}\nTime : ${api.responseTime||0}ms\nResult : ${api.result||''}\n\nASSERTIONS\n`;
-            (api.assertions||[]).forEach(a=>{
-                t+=`  [${a.passed?'PASS':'FAIL'}] ${a.name}`;
-                if(!a.passed&&a.error) t+=`  → ${a.error}`;
-                t+='\n';
-            });
-            t+=`\nREQUEST BODY\n${fmtJson(api.requestBody)||'(empty)'}\n\nRESPONSE BODY\n${fmtJson(api.responseBody)||'(empty)'}\n\n`;
-        });
-        t+=`${L}\n`;
-        return escJs(t);
-    });
-    const dlNames = evidenceData.map((d,i)=>{
-        const safe=(d.testCaseName||'Iteration_'+i).replace(/[^a-zA-Z0-9_\- ]/g,'_').replace(/\s+/g,'_').substring(0,50);
-        return `Iter_${i}_${safe}.txt`;
-    });
-
-    // ── sidebar items ──────────────────────────────────
-    const sidebarItems = evidenceData.map((iter,idx)=>{
-        const ok=!iter.apis.some(a=>a.result==='FAILED');
-        const cls=ok?'pass':'fail';
-        return `
-        <div class="si ${cls}" id="si-${idx}" data-status="${cls}" data-name="${esc(iter.testCaseName||'')}" onclick="showTest(${idx})">
-            <span class="si-num">${iter.iteration+1}</span>
-            <div class="si-mid">
-                <span class="si-name">${esc(iter.testCaseName||'Iteration '+(iter.iteration+1))}</span>
-                ${iter.scenarioType?`<span class="si-scenario ${iter.scenarioType.toLowerCase()==='positive'?'sc-pos':iter.scenarioType.toLowerCase()==='negative'?'sc-neg':'sc-oth'}">${esc(iter.scenarioType)}</span>`:''}
-            </div>
-            <span class="si-res ${cls}">${ok?'PASSED':'FAILED'}</span>
-        </div>`;
-    }).join('');
-
-    // ── test panels ────────────────────────────────────
-    const panelsHtml = evidenceData.map((iter,idx)=>{
-        const ok=!iter.apis.some(a=>a.result==='FAILED');
-        const cls=ok?'pass':'fail';
-        const label=ok?'PASSED':'FAILED';
-        const apiHtml = iter.apis.map((api,ai)=>{
-            const aok=api.result==='PASSED';
-            const acls=aok?'pass':'fail';
-            const mcls=(api.method||'GET').toLowerCase();
-            const grp=`g-${idx}-${ai}`;
-            const assertRows=(api.assertions||[]).map(a=>`
-                <tr class="${a.passed?'arow-p':'arow-f'}">
-                    <td class="ai">${a.passed?'✔':'✖'}</td>
-                    <td>${esc(a.name)}</td>
-                    <td>${a.passed?'<span class="b-pass">PASSED</span>':'<span class="b-fail">FAILED</span>'}</td>
-                    <td class="a-err">${esc(a.error||'')}</td>
-                </tr>`).join('');
-            const assertTbl=(api.assertions&&api.assertions.length)
-                ?`<table class="atbl"><thead><tr><th></th><th>Assertion</th><th>Result</th><th>Error</th></tr></thead><tbody>${assertRows}</tbody></table>`
-                :`<p class="no-assert">No assertions defined for this request.</p>`;
-            const mkHdrRows=obj=>obj?Object.entries(obj).map(([k,v])=>`<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join(''):'';;
-            const rqHdr=mkHdrRows(api.requestHeaders);
-            const rsHdr=mkHdrRows(api.responseHeaders);
-            const hdrTab=(rqHdr||rsHdr)?`
-                <div class="hdr-row">
-                    ${rqHdr?`<div class="hdr-blk"><div class="hdr-lbl">Request Headers</div><table class="hdrt"><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>${rqHdr}</tbody></table></div>`:''}
-                    ${rsHdr?`<div class="hdr-blk"><div class="hdr-lbl">Response Headers</div><table class="hdrt"><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>${rsHdr}</tbody></table></div>`:''}
-                </div>`:'';
-            return `
-            <div class="ab ${acls}" id="ab-${idx}-${ai}">
-                <div class="ah" onclick="toggleApi('ab-${idx}-${ai}')">
-                    <span class="mb ${mcls}">${esc(api.method||'GET')}</span>
-                    <span class="a-name">${esc(api.apiName||'Unknown')}</span>
-                    <span class="a-url">${esc(api.url||'')}</span>
-                    <div class="a-meta">
-                        <span class="sc ${aok?'sc-ok':'sc-err'}">${esc(String(api.statusCode||''))}</span>
-                        ${api.responseTime?`<span class="rt">${api.responseTime}ms</span>`:''}
-                        <span class="a-res ${acls}">${api.result||'UNKNOWN'}</span>
-                        <span class="arrow">▼</span>
-                    </div>
-                </div>
-                <div class="ab-body" style="display:none;">
-                    <div class="tb">
-                        <button class="tbb active" onclick="swTab(this,'asc-${idx}-${ai}','${grp}')">Assertions</button>
-                        <button class="tbb"        onclick="swTab(this,'rqb-${idx}-${ai}','${grp}')">Request Body</button>
-                        <button class="tbb"        onclick="swTab(this,'rsb-${idx}-${ai}','${grp}')">Response Body</button>
-                        ${(rqHdr||rsHdr)?`<button class="tbb" onclick="swTab(this,'hdr-${idx}-${ai}','${grp}')">Headers</button>`:''}
-                    </div>
-                    <div class="tc" id="asc-${idx}-${ai}" data-grp="${grp}">${assertTbl}</div>
-                    <div class="tc" id="rqb-${idx}-${ai}" data-grp="${grp}" style="display:none;">
-                        ${(api.requestBody&&api.requestBody.trim())
-                            ?`<div class="copy-wrap"><button class="copy-btn" onclick="copyBody(this)" title="Copy to clipboard">⧉ Copy</button><pre class="cb json-body">${esc(fmtJson(api.requestBody))}</pre></div>`
-                            :`<p class="no-body-msg">⚠ No request body for this request</p>`}
-                    </div>
-                    <div class="tc" id="rsb-${idx}-${ai}" data-grp="${grp}" style="display:none;">
-                        ${(api.responseBody&&api.responseBody.trim())
-                            ?`<div class="copy-wrap"><button class="copy-btn" onclick="copyBody(this)" title="Copy to clipboard">⧉ Copy</button><pre class="cb json-body">${esc(fmtJson(api.responseBody))}</pre></div>`
-                            :`<p class="no-body-msg">⚠ No response body for this request</p>`}
-                    </div>
-                    ${(rqHdr||rsHdr)?`<div class="tc" id="hdr-${idx}-${ai}" data-grp="${grp}" style="display:none;">${hdrTab}</div>`:''}
-                </div>
-            </div>`;
-        }).join('');
-        return `
-        <div class="tp" id="tp-${idx}" style="display:none;">
-            <div class="tph ${cls}">
-                <div class="tph-left">
-                    <span class="tsb ${cls}">${label}</span>
-                    <span class="t-name">${esc(iter.testCaseName||'Iteration '+iter.iteration)}</span>
-                    ${scenarioBadge(iter.scenarioType,'md')}
-                </div>
-                <div class="tph-right">
-                    <span class="t-meta">Iteration: ${iter.iteration}</span>
-                    <span class="t-meta">${iter.apis.length} API${iter.apis.length!==1?'s':''}</span>
-                    <button class="dl-btn" onclick="dlIter(${idx})">⬇&nbsp;Download</button>
-                </div>
-            </div>
-            <div class="api-list">${apiHtml}</div>
-        </div>`;
-    }).join('');
-
-    // ── summary page: overview table rows ─────────────
-    const overviewRows = evidenceData.map((iter,idx)=>{
-        const ok=!iter.apis.some(a=>a.result==='FAILED');
-        const cls=ok?'pass':'fail';
-        const iterAssertCount=iter.apis.reduce((s,a)=>s+(a.assertions||[]).length,0);
-
-        // API sub-rows sit directly in the same <table> as the header
-        // so colgroup widths apply to them automatically — perfect alignment.
-        const apiSubRows=iter.apis.map((api,ai)=>{
-            const aok=api.result==='PASSED';
-            const mcls=(api.method||'get').toLowerCase();
-            return `<tr class="ov-api-row" data-iter="${idx}" style="display:none;">
-                <td class="ov-c1"></td>
-                <td class="ov-c2 ov-api-cell">
-                    <span class="ov-indent"></span>
-                    <span class="mb ${mcls}" style="font-size:9px;min-width:50px;height:18px;">${esc(api.method||'GET')}</span>
-                    <span class="ov-api-label">${esc(api.apiName||'')}</span>
-                </td>
-                <td class="ov-c3">
-                    <span class="sc ${aok?'sc-ok':'sc-err'}">${esc(String(api.statusCode||''))}</span>
-                </td>
-                <td class="ov-c4">
-                    ${aok?'<span class="b-pass">PASSED</span>':'<span class="b-fail">FAILED</span>'}
-                </td>
-                <td class="ov-c5 ov-muted">${api.responseTime||0}ms</td>
-                <td class="ov-c6 ov-muted">${(api.assertions||[]).length}</td>
-            </tr>`;
-        }).join('');
-
-        return `
-        <tr class="ov-iter-row ${cls}" id="ovr-${idx}" onclick="toggleOvRow(${idx})">
-            <td class="ov-c1"><span class="ov-num ${cls}">${iter.iteration+1}</span></td>
-            <td class="ov-c2 ov-tc-name">
-                <span class="ov-arrow" id="ova-${idx}">▶</span>
-                ${esc(iter.testCaseName||'Iteration '+(iter.iteration+1))}
-                ${iter.scenarioType?`<span class="si-scenario ${iter.scenarioType.toLowerCase()==='positive'?'sc-pos':iter.scenarioType.toLowerCase()==='negative'?'sc-neg':'sc-oth'}" style="margin-left:6px;font-size:9px;">${esc(iter.scenarioType)}</span>`:''}
-            </td>
-            <td class="ov-c3"></td>
-            <td class="ov-c4">${ok?'<span class="b-pass">PASSED</span>':'<span class="b-fail">FAILED</span>'}</td>
-            <td class="ov-c5 ov-muted">${iter.apis.length} API${iter.apis.length!==1?'s':''}</td>
-            <td class="ov-c6 ov-muted">${iterAssertCount}</td>
-        </tr>
-        ${apiSubRows}`;
-    }).join('');
-
-    // ── attachment HTML ────────────────────────────────
-    const dataAttHtml = dataFileB64
-        ?`<div class="att-card">
-            <div class="att-icon">📄</div>
-            <div class="att-info">
-                <div class="att-name">${esc(dataFileName)}</div>
-                <div class="att-sub">Test Data File</div>
-            </div>
-            <div class="att-btns">
-                <a class="att-btn" href="data:${dataFileMime};base64,${dataFileB64}" download="${esc(dataFileName)}">⬇ Download</a>
-            </div>
-          </div>`
-        :`<p class="att-none">No test data file attached — set copyTestDataToReports=true in framework.properties</p>`;
-
-    const evAttHtml = evidenceB64
-        ?`<div class="att-card">
-            <div class="att-icon">${evidenceFileName.endsWith('.docx')?'📝':'📃'}</div>
-            <div class="att-info">
-                <div class="att-name">${esc(evidenceFileName)}</div>
-                <div class="att-sub">Execution Evidence</div>
-            </div>
-            <div class="att-btns">
-                ${evidenceFileName.endsWith('.txt')?`<a class="att-btn att-view" href="data:text/plain;base64,${evidenceB64}" target="_blank">👁 View</a>`:''}
-                <a class="att-btn" href="data:${evidenceMime};base64,${evidenceB64}" download="${esc(evidenceFileName)}">⬇ Download</a>
-            </div>
-          </div>`
-        :`<p class="att-none">No evidence file found — run test with evidenceFormat=docx or txt</p>`;
-
-    // ── HTML ───────────────────────────────────────────
-    const html = `<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>${colName} — Extent Report</title>
+<title>Sample Collection — Extent Report</title>
 <style>
 /* ── dark vars ──────────────────────────────────────── */
 :root{
@@ -620,15 +292,15 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
 
 <!-- NAVBAR -->
 <div class="nav">
-    <div class="nav-brand">${folName}&nbsp;<span>Report</span></div>
+    <div class="nav-brand">ROOT&nbsp;<span>Report</span></div>
     <div class="nav-tabs">
         <button class="nav-tab active" id="ntab-tests"   onclick="switchPage('tests')">Tests</button>
         <button class="nav-tab"        id="ntab-summary" onclick="switchPage('summary')">Summary</button>
     </div>
     <div class="nav-right">
         <div class="nav-meta">
-            <span><b>Collection:</b> ${colName}</span>
-            <span><b>Generated:</b> ${new Date().toLocaleString()}</span>
+            <span><b>Collection:</b> Sample Collection</span>
+            <span><b>Generated:</b> 8/6/2026, 10:33:29 am</span>
         </div>
         <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">
             <span id="theme-ico">☀️</span><span id="theme-lbl">Light Mode</span>
@@ -640,32 +312,32 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
 <div class="page active" id="page-tests">
 
     <div class="dash">
-        <div class="dc tot"><div class="dc-n">${total}</div><div class="dc-l">Total</div></div>
-        <div class="dc pas"><div class="dc-n">${passed}</div><div class="dc-l">Passed</div></div>
-        <div class="dc fai"><div class="dc-n">${failed}</div><div class="dc-l">Failed</div></div>
-        <div class="dc tot"><div class="dc-n">${totalApis}</div><div class="dc-l">APIs</div></div>
-        <div class="dc tot"><div class="dc-n">${totalAssert}</div><div class="dc-l">Assertions</div></div>
-        <div class="dc pas"><div class="dc-n">${passAssert}</div><div class="dc-l">Assert Pass</div></div>
-        <div class="dc fai"><div class="dc-n">${failAssert}</div><div class="dc-l">Assert Fail</div></div>
+        <div class="dc tot"><div class="dc-n">1</div><div class="dc-l">Total</div></div>
+        <div class="dc pas"><div class="dc-n">1</div><div class="dc-l">Passed</div></div>
+        <div class="dc fai"><div class="dc-n">0</div><div class="dc-l">Failed</div></div>
+        <div class="dc tot"><div class="dc-n">2</div><div class="dc-l">APIs</div></div>
+        <div class="dc tot"><div class="dc-n">4</div><div class="dc-l">Assertions</div></div>
+        <div class="dc pas"><div class="dc-n">4</div><div class="dc-l">Assert Pass</div></div>
+        <div class="dc fai"><div class="dc-n">0</div><div class="dc-l">Assert Fail</div></div>
         <div class="donut-wrap">
             <svg width="72" height="72" viewBox="0 0 90 90">
                 <circle cx="45" cy="45" r="40" fill="none" stroke="#f85149" stroke-width="10"/>
                 <circle cx="45" cy="45" r="40" fill="none" stroke="#3fb950" stroke-width="10"
-                    stroke-dasharray="${donutPass} ${donutFail}"/>
+                    stroke-dasharray="251 0.19999999999998863"/>
             </svg>
             <div class="di">
-                <div class="rate">${passRate}%</div>
-                <div class="pl">✔ ${passed} Passed</div>
-                <div class="fl">✖ ${failed} Failed</div>
+                <div class="rate">100%</div>
+                <div class="pl">✔ 1 Passed</div>
+                <div class="fl">✖ 0 Failed</div>
             </div>
         </div>
     </div>
 
     <div class="ms">
-        <span><b>Start:</b> ${startStr}</span>
-        <span><b>End:</b> ${endStr}</span>
-        <span><b>Duration:</b> ${durStr}</span>
-        <span><b>Pass Rate:</b> ${passRate}%</span>
+        <span><b>Start:</b> 8/6/2026, 10:33:28 am</span>
+        <span><b>End:</b> 8/6/2026, 10:33:29 am</span>
+        <span><b>Duration:</b> 1.12s</span>
+        <span><b>Pass Rate:</b> 100%</span>
     </div>
 
     <div class="layout">
@@ -675,18 +347,176 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
                 <button class="sb-clear" onclick="document.getElementById('testSearch').value='';searchTests();">✕</button>
             </div>
             <div class="sb-tabs">
-                <button class="sb-tab active"   id="tab-all"  onclick="filterSidebar('all')">All<span class="sb-cnt">${total}</span></button>
-                <button class="sb-tab tab-pass" id="tab-pass" onclick="filterSidebar('pass')">Passed<span class="sb-cnt">${passed}</span></button>
-                <button class="sb-tab tab-fail" id="tab-fail" onclick="filterSidebar('fail')">Failed<span class="sb-cnt">${failed}</span></button>
+                <button class="sb-tab active"   id="tab-all"  onclick="filterSidebar('all')">All<span class="sb-cnt">1</span></button>
+                <button class="sb-tab tab-pass" id="tab-pass" onclick="filterSidebar('pass')">Passed<span class="sb-cnt">1</span></button>
+                <button class="sb-tab tab-fail" id="tab-fail" onclick="filterSidebar('fail')">Failed<span class="sb-cnt">0</span></button>
             </div>
-            <div class="sb-list" id="sb-list">${sidebarItems}</div>
+            <div class="sb-list" id="sb-list">
+        <div class="si pass" id="si-0" data-status="pass" data-name="Iteration 0" onclick="showTest(0)">
+            <span class="si-num">1</span>
+            <div class="si-mid">
+                <span class="si-name">Iteration 0</span>
+                
+            </div>
+            <span class="si-res pass">PASSED</span>
+        </div></div>
         </div>
         <div class="ct" id="ct">
             <div class="ph" id="ph">
                 <div class="ph-ico">📋</div>
                 <div>Select a test case from the left to view details</div>
             </div>
-            ${panelsHtml}
+            
+        <div class="tp" id="tp-0" style="display:none;">
+            <div class="tph pass">
+                <div class="tph-left">
+                    <span class="tsb pass">PASSED</span>
+                    <span class="t-name">Iteration 0</span>
+                    
+                </div>
+                <div class="tph-right">
+                    <span class="t-meta">Iteration: 0</span>
+                    <span class="t-meta">2 APIs</span>
+                    <button class="dl-btn" onclick="dlIter(0)">⬇&nbsp;Download</button>
+                </div>
+            </div>
+            <div class="api-list">
+            <div class="ab pass" id="ab-0-0">
+                <div class="ah" onclick="toggleApi('ab-0-0')">
+                    <span class="mb post">POST</span>
+                    <span class="a-name">Create User</span>
+                    <span class="a-url">https://postman-echo.com/post</span>
+                    <div class="a-meta">
+                        <span class="sc sc-ok">200</span>
+                        <span class="rt">329ms</span>
+                        <span class="a-res pass">PASSED</span>
+                        <span class="arrow">▼</span>
+                    </div>
+                </div>
+                <div class="ab-body" style="display:none;">
+                    <div class="tb">
+                        <button class="tbb active" onclick="swTab(this,'asc-0-0','g-0-0')">Assertions</button>
+                        <button class="tbb"        onclick="swTab(this,'rqb-0-0','g-0-0')">Request Body</button>
+                        <button class="tbb"        onclick="swTab(this,'rsb-0-0','g-0-0')">Response Body</button>
+                        <button class="tbb" onclick="swTab(this,'hdr-0-0','g-0-0')">Headers</button>
+                    </div>
+                    <div class="tc" id="asc-0-0" data-grp="g-0-0"><table class="atbl"><thead><tr><th></th><th>Assertion</th><th>Result</th><th>Error</th></tr></thead><tbody>
+                <tr class="arow-p">
+                    <td class="ai">✔</td>
+                    <td>Status code is 200</td>
+                    <td><span class="b-pass">PASSED</span></td>
+                    <td class="a-err"></td>
+                </tr>
+                <tr class="arow-p">
+                    <td class="ai">✔</td>
+                    <td>Response has same name</td>
+                    <td><span class="b-pass">PASSED</span></td>
+                    <td class="a-err"></td>
+                </tr></tbody></table></div>
+                    <div class="tc" id="rqb-0-0" data-grp="g-0-0" style="display:none;">
+                        <div class="copy-wrap"><button class="copy-btn" onclick="copyBody(this)" title="Copy to clipboard">⧉ Copy</button><pre class="cb json-body">{
+  &quot;name&quot;: &quot;{{name}}&quot;,
+  &quot;email&quot;: &quot;{{email}}&quot;,
+  &quot;age&quot;: {{age}}
+}</pre></div>
+                    </div>
+                    <div class="tc" id="rsb-0-0" data-grp="g-0-0" style="display:none;">
+                        <div class="copy-wrap"><button class="copy-btn" onclick="copyBody(this)" title="Copy to clipboard">⧉ Copy</button><pre class="cb json-body">{
+  &quot;args&quot;: {},
+  &quot;data&quot;: &quot;{\n  \&quot;name\&quot;: \&quot;{{name}}\&quot;,\n  \&quot;email\&quot;: \&quot;{{email}}\&quot;,\n  \&quot;age\&quot;: {{age}}\n}&quot;,
+  &quot;files&quot;: {},
+  &quot;form&quot;: {},
+  &quot;headers&quot;: {
+    &quot;host&quot;: &quot;postman-echo.com&quot;,
+    &quot;user-agent&quot;: &quot;PostmanRuntime/7.39.1&quot;,
+    &quot;accept&quot;: &quot;*/*&quot;,
+    &quot;accept-encoding&quot;: &quot;gzip, br&quot;,
+    &quot;postman-token&quot;: &quot;ddb909e5-fa45-4e35-b56f-0da5773faf95&quot;,
+    &quot;x-forwarded-proto&quot;: &quot;https&quot;,
+    &quot;cache-control&quot;: &quot;no-cache&quot;,
+    &quot;content-length&quot;: &quot;66&quot;,
+    &quot;content-type&quot;: &quot;application/json&quot;
+  },
+  &quot;json&quot;: null,
+  &quot;url&quot;: &quot;https://postman-echo.com/post&quot;
+}</pre></div>
+                    </div>
+                    <div class="tc" id="hdr-0-0" data-grp="g-0-0" style="display:none;">
+                <div class="hdr-row">
+                    <div class="hdr-blk"><div class="hdr-lbl">Request Headers</div><table class="hdrt"><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody><tr><td>Content-Type</td><td>application/json</td></tr><tr><td>User-Agent</td><td>PostmanRuntime/7.39.1</td></tr><tr><td>Accept</td><td>*/*</td></tr><tr><td>Cache-Control</td><td>no-cache</td></tr><tr><td>Postman-Token</td><td>ddb909e5-fa45-4e35-b56f-0da5773faf95</td></tr><tr><td>Host</td><td>postman-echo.com</td></tr><tr><td>Accept-Encoding</td><td>gzip, deflate, br</td></tr><tr><td>Connection</td><td>keep-alive</td></tr><tr><td>Content-Length</td><td>66</td></tr></tbody></table></div>
+                    <div class="hdr-blk"><div class="hdr-lbl">Response Headers</div><table class="hdrt"><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody><tr><td>Date</td><td>Mon, 08 Jun 2026 05:03:53 GMT</td></tr><tr><td>Content-Type</td><td>application/json; charset=utf-8</td></tr><tr><td>Transfer-Encoding</td><td>chunked</td></tr><tr><td>Connection</td><td>keep-alive</td></tr><tr><td>etag</td><td>W/&quot;1c9-c/RceZV/2LH2ggqatD4nSkQtqO4&quot;</td></tr><tr><td>vary</td><td>Accept-Encoding</td></tr><tr><td>x-envoy-upstream-service-time</td><td>5</td></tr><tr><td>cf-cache-status</td><td>DYNAMIC</td></tr><tr><td>Set-Cookie</td><td>sails.sid=s%3AJdIGKkLDcFMXfUGFXO9TmULit1QpiA2J.hxf8%2B6%2Flzvc2Y%2BvJvK1gHTs0hl9%2B9tIsH8JzzE82kR8; Path=/; HttpOnly</td></tr><tr><td>set-cookie</td><td>_cfuvid=q5nnG6GxRwpidLETKBkqgzQc.JP6V4C8t5NnVaroVI0-1780895033.3498552-1.0.1.1-j19Gep.U5Nc_G9KCcroI.OLUhPMDxINT_1liF2717ts; HttpOnly; SameSite=None; Secure; Path=/; Domain=postman-echo.com</td></tr><tr><td>Content-Encoding</td><td>gzip</td></tr><tr><td>Server</td><td>cloudflare</td></tr><tr><td>CF-RAY</td><td>a0855a466871060c-MAA</td></tr></tbody></table></div>
+                </div></div>
+                </div>
+            </div>
+            <div class="ab pass" id="ab-0-1">
+                <div class="ah" onclick="toggleApi('ab-0-1')">
+                    <span class="mb post">POST</span>
+                    <span class="a-name">Create User 2</span>
+                    <span class="a-url">https://postman-echo.com/post</span>
+                    <div class="a-meta">
+                        <span class="sc sc-ok">200</span>
+                        <span class="rt">257ms</span>
+                        <span class="a-res pass">PASSED</span>
+                        <span class="arrow">▼</span>
+                    </div>
+                </div>
+                <div class="ab-body" style="display:none;">
+                    <div class="tb">
+                        <button class="tbb active" onclick="swTab(this,'asc-0-1','g-0-1')">Assertions</button>
+                        <button class="tbb"        onclick="swTab(this,'rqb-0-1','g-0-1')">Request Body</button>
+                        <button class="tbb"        onclick="swTab(this,'rsb-0-1','g-0-1')">Response Body</button>
+                        <button class="tbb" onclick="swTab(this,'hdr-0-1','g-0-1')">Headers</button>
+                    </div>
+                    <div class="tc" id="asc-0-1" data-grp="g-0-1"><table class="atbl"><thead><tr><th></th><th>Assertion</th><th>Result</th><th>Error</th></tr></thead><tbody>
+                <tr class="arow-p">
+                    <td class="ai">✔</td>
+                    <td>Status code is 200</td>
+                    <td><span class="b-pass">PASSED</span></td>
+                    <td class="a-err"></td>
+                </tr>
+                <tr class="arow-p">
+                    <td class="ai">✔</td>
+                    <td>Response has same name</td>
+                    <td><span class="b-pass">PASSED</span></td>
+                    <td class="a-err"></td>
+                </tr></tbody></table></div>
+                    <div class="tc" id="rqb-0-1" data-grp="g-0-1" style="display:none;">
+                        <div class="copy-wrap"><button class="copy-btn" onclick="copyBody(this)" title="Copy to clipboard">⧉ Copy</button><pre class="cb json-body">{
+  &quot;name&quot;: &quot;{{name}}&quot;,
+  &quot;email&quot;: &quot;{{email}}&quot;,
+  &quot;age&quot;: {{age}}
+}</pre></div>
+                    </div>
+                    <div class="tc" id="rsb-0-1" data-grp="g-0-1" style="display:none;">
+                        <div class="copy-wrap"><button class="copy-btn" onclick="copyBody(this)" title="Copy to clipboard">⧉ Copy</button><pre class="cb json-body">{
+  &quot;args&quot;: {},
+  &quot;data&quot;: &quot;{\n  \&quot;name\&quot;: \&quot;{{name}}\&quot;,\n  \&quot;email\&quot;: \&quot;{{email}}\&quot;,\n  \&quot;age\&quot;: {{age}}\n}&quot;,
+  &quot;files&quot;: {},
+  &quot;form&quot;: {},
+  &quot;headers&quot;: {
+    &quot;host&quot;: &quot;postman-echo.com&quot;,
+    &quot;accept&quot;: &quot;*/*&quot;,
+    &quot;cache-control&quot;: &quot;no-cache&quot;,
+    &quot;accept-encoding&quot;: &quot;gzip, br&quot;,
+    &quot;x-forwarded-proto&quot;: &quot;https&quot;,
+    &quot;postman-token&quot;: &quot;b8fbfd5a-8ffa-4725-96d5-ecdd247ae3fb&quot;,
+    &quot;content-length&quot;: &quot;66&quot;,
+    &quot;content-type&quot;: &quot;application/json&quot;,
+    &quot;user-agent&quot;: &quot;PostmanRuntime/7.39.1&quot;,
+    &quot;cookie&quot;: &quot;sails.sid=s%3AJdIGKkLDcFMXfUGFXO9TmULit1QpiA2J.hxf8%2B6%2Flzvc2Y%2BvJvK1gHTs0hl9%2B9tIsH8JzzE82kR8; __cf_bm=zAkrCjRqG2aLrH_ZwgWF20xzag1Irh8nDIEjyGiEsSs-1780895033.3498552-1.0.1.1-MLxVQUIVaTBK8ZKFL1jZ5JeKPtZrnzR8SOhd7iJ_5nIRWEAr3WvBNwdkMbRnVtF0NtiljkSIXsfQNd7yDX6Avv2xsktkzSVAINQKviivT9hzFTEpoV_grby2CZv95V_Y; _cfuvid=q5nnG6GxRwpidLETKBkqgzQc.JP6V4C8t5NnVaroVI0-1780895033.3498552-1.0.1.1-j19Gep.U5Nc_G9KCcroI.OLUhPMDxINT_1liF2717ts&quot;
+  },
+  &quot;json&quot;: null,
+  &quot;url&quot;: &quot;https://postman-echo.com/post&quot;
+}</pre></div>
+                    </div>
+                    <div class="tc" id="hdr-0-1" data-grp="g-0-1" style="display:none;">
+                <div class="hdr-row">
+                    <div class="hdr-blk"><div class="hdr-lbl">Request Headers</div><table class="hdrt"><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody><tr><td>Content-Type</td><td>application/json</td></tr><tr><td>User-Agent</td><td>PostmanRuntime/7.39.1</td></tr><tr><td>Accept</td><td>*/*</td></tr><tr><td>Cache-Control</td><td>no-cache</td></tr><tr><td>Postman-Token</td><td>b8fbfd5a-8ffa-4725-96d5-ecdd247ae3fb</td></tr><tr><td>Host</td><td>postman-echo.com</td></tr><tr><td>Accept-Encoding</td><td>gzip, deflate, br</td></tr><tr><td>Connection</td><td>keep-alive</td></tr><tr><td>Content-Length</td><td>66</td></tr><tr><td>Cookie</td><td>sails.sid=s%3AJdIGKkLDcFMXfUGFXO9TmULit1QpiA2J.hxf8%2B6%2Flzvc2Y%2BvJvK1gHTs0hl9%2B9tIsH8JzzE82kR8; __cf_bm=zAkrCjRqG2aLrH_ZwgWF20xzag1Irh8nDIEjyGiEsSs-1780895033.3498552-1.0.1.1-MLxVQUIVaTBK8ZKFL1jZ5JeKPtZrnzR8SOhd7iJ_5nIRWEAr3WvBNwdkMbRnVtF0NtiljkSIXsfQNd7yDX6Avv2xsktkzSVAINQKviivT9hzFTEpoV_grby2CZv95V_Y; _cfuvid=q5nnG6GxRwpidLETKBkqgzQc.JP6V4C8t5NnVaroVI0-1780895033.3498552-1.0.1.1-j19Gep.U5Nc_G9KCcroI.OLUhPMDxINT_1liF2717ts</td></tr></tbody></table></div>
+                    <div class="hdr-blk"><div class="hdr-lbl">Response Headers</div><table class="hdrt"><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody><tr><td>Date</td><td>Mon, 08 Jun 2026 05:03:53 GMT</td></tr><tr><td>Content-Type</td><td>application/json; charset=utf-8</td></tr><tr><td>Transfer-Encoding</td><td>chunked</td></tr><tr><td>Connection</td><td>keep-alive</td></tr><tr><td>etag</td><td>W/&quot;384-fuDeWQJvV0ES49kzq4fE0gZEX8Y&quot;</td></tr><tr><td>vary</td><td>Accept-Encoding</td></tr><tr><td>Set-Cookie</td><td>sails.sid=s%3Ap2te5U7_GBPNUEKCo7Ei5DNCDwVTHKJA.6DBe73OY4xcsj2VZr4tam5YkrhdstU%2BNW0B3KtkFei0; Path=/; HttpOnly</td></tr><tr><td>x-envoy-upstream-service-time</td><td>5</td></tr><tr><td>cf-cache-status</td><td>DYNAMIC</td></tr><tr><td>Content-Encoding</td><td>gzip</td></tr><tr><td>Server</td><td>cloudflare</td></tr><tr><td>CF-RAY</td><td>a0855a48b8b9060c-MAA</td></tr></tbody></table></div>
+                </div></div>
+                </div>
+            </div></div>
+        </div>
         </div>
     </div>
 
@@ -706,14 +536,14 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
                 <div class="pie-block">
                     <div class="pie-label">Iterations</div>
                     <svg width="180" height="180" viewBox="0 0 180 180">
-                        ${buildPie(passed,total,'#3fb950','#f85149')}
+                        <circle cx="90" cy="90" r="80" fill="#3fb950"/>
                         <circle cx="90" cy="90" r="46" fill="var(--panel-bg)"/>
-                        <text x="90" y="87" text-anchor="middle" font-size="22" font-weight="800" fill="var(--text)">${passRate}%</text>
+                        <text x="90" y="87" text-anchor="middle" font-size="22" font-weight="800" fill="var(--text)">100%</text>
                         <text x="90" y="105" text-anchor="middle" font-size="11" fill="var(--text2)">Pass Rate</text>
                     </svg>
                     <div class="pie-legend">
-                        <div class="pie-leg"><div class="pie-dot" style="background:#3fb950"></div>${passed} Passed</div>
-                        <div class="pie-leg"><div class="pie-dot" style="background:#f85149"></div>${failed} Failed</div>
+                        <div class="pie-leg"><div class="pie-dot" style="background:#3fb950"></div>1 Passed</div>
+                        <div class="pie-leg"><div class="pie-dot" style="background:#f85149"></div>0 Failed</div>
                     </div>
                 </div>
 
@@ -721,14 +551,14 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
                 <div class="pie-block">
                     <div class="pie-label">API Calls</div>
                     <svg width="180" height="180" viewBox="0 0 180 180">
-                        ${buildPie(passApis,totalApis,'#3fb950','#f85149')}
+                        <circle cx="90" cy="90" r="80" fill="#3fb950"/>
                         <circle cx="90" cy="90" r="46" fill="var(--panel-bg)"/>
-                        <text x="90" y="87" text-anchor="middle" font-size="22" font-weight="800" fill="var(--text)">${totalApis}</text>
+                        <text x="90" y="87" text-anchor="middle" font-size="22" font-weight="800" fill="var(--text)">2</text>
                         <text x="90" y="105" text-anchor="middle" font-size="11" fill="var(--text2)">Total APIs</text>
                     </svg>
                     <div class="pie-legend">
-                        <div class="pie-leg"><div class="pie-dot" style="background:#3fb950"></div>${passApis} Passed</div>
-                        <div class="pie-leg"><div class="pie-dot" style="background:#f85149"></div>${failApis} Failed</div>
+                        <div class="pie-leg"><div class="pie-dot" style="background:#3fb950"></div>2 Passed</div>
+                        <div class="pie-leg"><div class="pie-dot" style="background:#f85149"></div>0 Failed</div>
                     </div>
                 </div>
 
@@ -736,14 +566,14 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
                 <div class="pie-block">
                     <div class="pie-label">Assertions</div>
                     <svg width="180" height="180" viewBox="0 0 180 180">
-                        ${buildPie(passAssert,totalAssert,'#3fb950','#f85149')}
+                        <circle cx="90" cy="90" r="80" fill="#3fb950"/>
                         <circle cx="90" cy="90" r="46" fill="var(--panel-bg)"/>
-                        <text x="90" y="87" text-anchor="middle" font-size="22" font-weight="800" fill="var(--text)">${totalAssert}</text>
+                        <text x="90" y="87" text-anchor="middle" font-size="22" font-weight="800" fill="var(--text)">4</text>
                         <text x="90" y="105" text-anchor="middle" font-size="11" fill="var(--text2)">Total</text>
                     </svg>
                     <div class="pie-legend">
-                        <div class="pie-leg"><div class="pie-dot" style="background:#3fb950"></div>${passAssert} Passed</div>
-                        <div class="pie-leg"><div class="pie-dot" style="background:#f85149"></div>${failAssert} Failed</div>
+                        <div class="pie-leg"><div class="pie-dot" style="background:#3fb950"></div>4 Passed</div>
+                        <div class="pie-leg"><div class="pie-dot" style="background:#f85149"></div>0 Failed</div>
                     </div>
                 </div>
 
@@ -758,11 +588,11 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
             <table class="sum-tbl">
                 <thead><tr><th>Summary Item</th><th>Total</th><th>Failed</th></tr></thead>
                 <tbody>
-                    <tr><td>Iterations</td>       <td class="num-total">${total}</td>     <td class="${failed===0?'num-zero':'num-fail'}">${failed}</td></tr>
-                    <tr><td>Requests</td>          <td class="num-total">${totalApis}</td> <td class="${failApis===0?'num-zero':'num-fail'}">${failApis}</td></tr>
+                    <tr><td>Iterations</td>       <td class="num-total">1</td>     <td class="num-zero">0</td></tr>
+                    <tr><td>Requests</td>          <td class="num-total">2</td> <td class="num-zero">0</td></tr>
                     <tr><td>Prerequest Scripts</td><td class="num-total">0</td>            <td class="num-zero">0</td></tr>
-                    <tr><td>Test Scripts</td>      <td class="num-total">${totalApis}</td> <td class="${failApis===0?'num-zero':'num-fail'}">${failApis}</td></tr>
-                    <tr><td>Assertions</td>        <td class="num-total">${totalAssert}</td><td class="${failAssert===0?'num-zero':'num-fail'}">${failAssert}</td></tr>
+                    <tr><td>Test Scripts</td>      <td class="num-total">2</td> <td class="num-zero">0</td></tr>
+                    <tr><td>Assertions</td>        <td class="num-total">4</td><td class="num-zero">0</td></tr>
                     <tr><td>Skipped Tests</td>     <td class="num-total">0</td>            <td class="num-zero">—</td></tr>
                 </tbody>
             </table>
@@ -774,8 +604,18 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
         <div class="sum-card-hdr"><span>📎</span><span class="sum-card-title">Attachments</span></div>
         <div class="sum-card-body">
             <div class="att-row">
-                ${dataAttHtml}
-                ${evAttHtml}
+                <p class="att-none">No test data file attached — set copyTestDataToReports=true in framework.properties</p>
+                <div class="att-card">
+            <div class="att-icon">📝</div>
+            <div class="att-info">
+                <div class="att-name">ExecutionEvidence.docx</div>
+                <div class="att-sub">Execution Evidence</div>
+            </div>
+            <div class="att-btns">
+                
+                <a class="att-btn" href="data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,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" download="ExecutionEvidence.docx">⬇ Download</a>
+            </div>
+          </div>
             </div>
         </div>
     </div>
@@ -807,7 +647,50 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
                         <th class="ov-c6 ov-th-ctr">Assertions</th>
                     </tr>
                 </thead>
-                <tbody>${overviewRows}</tbody>
+                <tbody>
+        <tr class="ov-iter-row pass" id="ovr-0" onclick="toggleOvRow(0)">
+            <td class="ov-c1"><span class="ov-num pass">1</span></td>
+            <td class="ov-c2 ov-tc-name">
+                <span class="ov-arrow" id="ova-0">▶</span>
+                Iteration 0
+                
+            </td>
+            <td class="ov-c3"></td>
+            <td class="ov-c4"><span class="b-pass">PASSED</span></td>
+            <td class="ov-c5 ov-muted">2 APIs</td>
+            <td class="ov-c6 ov-muted">4</td>
+        </tr>
+        <tr class="ov-api-row" data-iter="0" style="display:none;">
+                <td class="ov-c1"></td>
+                <td class="ov-c2 ov-api-cell">
+                    <span class="ov-indent"></span>
+                    <span class="mb post" style="font-size:9px;min-width:50px;height:18px;">POST</span>
+                    <span class="ov-api-label">Create User</span>
+                </td>
+                <td class="ov-c3">
+                    <span class="sc sc-ok">200</span>
+                </td>
+                <td class="ov-c4">
+                    <span class="b-pass">PASSED</span>
+                </td>
+                <td class="ov-c5 ov-muted">329ms</td>
+                <td class="ov-c6 ov-muted">2</td>
+            </tr><tr class="ov-api-row" data-iter="0" style="display:none;">
+                <td class="ov-c1"></td>
+                <td class="ov-c2 ov-api-cell">
+                    <span class="ov-indent"></span>
+                    <span class="mb post" style="font-size:9px;min-width:50px;height:18px;">POST</span>
+                    <span class="ov-api-label">Create User 2</span>
+                </td>
+                <td class="ov-c3">
+                    <span class="sc sc-ok">200</span>
+                </td>
+                <td class="ov-c4">
+                    <span class="b-pass">PASSED</span>
+                </td>
+                <td class="ov-c5 ov-muted">257ms</td>
+                <td class="ov-c6 ov-muted">2</td>
+            </tr></tbody>
             </table>
         </div>
     </div>
@@ -816,8 +699,98 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
 </div>
 
 <script>
-var DL = [${dlPayloads.map(p => '`' + p + '`').join(',')}];
-var DN = ${JSON.stringify(dlNames)};
+var DL = [`================================================================================
+TEST CASE NAME : Iteration 0
+ITERATION      : 0
+OVERALL RESULT : PASSED
+================================================================================
+
+------------------------------------------------------------
+API #1 : Create User
+------------------------------------------------------------
+Method : POST
+URL : https://postman-echo.com/post
+Status : 200
+Time : 329ms
+Result : PASSED
+
+ASSERTIONS
+  [PASS] Status code is 200
+  [PASS] Response has same name
+
+REQUEST BODY
+{
+  "name": "{{name}}",
+  "email": "{{email}}",
+  "age": {{age}}
+}
+
+RESPONSE BODY
+{
+  "args": {},
+  "data": "{\\n  \\"name\\": \\"{{name}}\\",\\n  \\"email\\": \\"{{email}}\\",\\n  \\"age\\": {{age}}\\n}",
+  "files": {},
+  "form": {},
+  "headers": {
+    "host": "postman-echo.com",
+    "user-agent": "PostmanRuntime/7.39.1",
+    "accept": "*/*",
+    "accept-encoding": "gzip, br",
+    "postman-token": "ddb909e5-fa45-4e35-b56f-0da5773faf95",
+    "x-forwarded-proto": "https",
+    "cache-control": "no-cache",
+    "content-length": "66",
+    "content-type": "application/json"
+  },
+  "json": null,
+  "url": "https://postman-echo.com/post"
+}
+
+------------------------------------------------------------
+API #2 : Create User 2
+------------------------------------------------------------
+Method : POST
+URL : https://postman-echo.com/post
+Status : 200
+Time : 257ms
+Result : PASSED
+
+ASSERTIONS
+  [PASS] Status code is 200
+  [PASS] Response has same name
+
+REQUEST BODY
+{
+  "name": "{{name}}",
+  "email": "{{email}}",
+  "age": {{age}}
+}
+
+RESPONSE BODY
+{
+  "args": {},
+  "data": "{\\n  \\"name\\": \\"{{name}}\\",\\n  \\"email\\": \\"{{email}}\\",\\n  \\"age\\": {{age}}\\n}",
+  "files": {},
+  "form": {},
+  "headers": {
+    "host": "postman-echo.com",
+    "accept": "*/*",
+    "cache-control": "no-cache",
+    "accept-encoding": "gzip, br",
+    "x-forwarded-proto": "https",
+    "postman-token": "b8fbfd5a-8ffa-4725-96d5-ecdd247ae3fb",
+    "content-length": "66",
+    "content-type": "application/json",
+    "user-agent": "PostmanRuntime/7.39.1",
+    "cookie": "sails.sid=s%3AJdIGKkLDcFMXfUGFXO9TmULit1QpiA2J.hxf8%2B6%2Flzvc2Y%2BvJvK1gHTs0hl9%2B9tIsH8JzzE82kR8; __cf_bm=zAkrCjRqG2aLrH_ZwgWF20xzag1Irh8nDIEjyGiEsSs-1780895033.3498552-1.0.1.1-MLxVQUIVaTBK8ZKFL1jZ5JeKPtZrnzR8SOhd7iJ_5nIRWEAr3WvBNwdkMbRnVtF0NtiljkSIXsfQNd7yDX6Avv2xsktkzSVAINQKviivT9hzFTEpoV_grby2CZv95V_Y; _cfuvid=q5nnG6GxRwpidLETKBkqgzQc.JP6V4C8t5NnVaroVI0-1780895033.3498552-1.0.1.1-j19Gep.U5Nc_G9KCcroI.OLUhPMDxINT_1liF2717ts"
+  },
+  "json": null,
+  "url": "https://postman-echo.com/post"
+}
+
+================================================================================
+`];
+var DN = ["Iter_0_Iteration_0.txt"];
 var activeFilter = 'all';
 var activeIdx    = -1;
 
@@ -939,13 +912,13 @@ function highlightJson(raw) {
     if(!txt.trim()) return raw;
     try { txt=JSON.stringify(JSON.parse(txt),null,2); } catch(e) {}
     return txt.replace(
-        /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(?:\s*:)?|\b(?:true|false)\b|\bnull\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?|[{}\[\],:])/g,
+        /("(?:\u[a-fA-F0-9]{4}|\[^u]|[^\"])*"(?:s*:)?|(?:true|false)|null|-?d+(?:.d*)?(?:[eE][+-]?d+)?|[{}[],:])/g,
         function(m){
             var cls='jp';
             if(/^"/.test(m)){ cls=/:$/.test(m)?'jk':'js'; }
             else if(/^true|false$/.test(m)){ cls='jb'; }
             else if(/^null$/.test(m)){ cls='jnl'; }
-            else if(/^-?\d/.test(m)){ cls='jn'; }
+            else if(/^-?d/.test(m)){ cls='jn'; }
             var s=m.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
             return '<span class="'+cls+'">'+s+'</span>';
         }
@@ -976,11 +949,4 @@ function toggleOvRow(idx) {
 })();
 </script>
 </body>
-</html>`;
-
-    const out = path.join(reportFolder, 'extent-report.html');
-    fs.writeFileSync(out, html, 'utf8');
-    console.log(`📊 Extent Report Generated: ${out}`);
-}
-
-module.exports = generateExtentReport;
+</html>
