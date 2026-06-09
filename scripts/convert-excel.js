@@ -3,6 +3,8 @@ const path = require('path');
 const XLSX = require('xlsx');
 const Papa = require('papaparse');
 
+const { sanitizeRow } = require('./utils');
+
 const INPUT_FOLDER =
     './csv-converter';
 
@@ -54,7 +56,7 @@ excelFiles.forEach(file => {
             path.join(INPUT_FOLDER, file);
 
         const workbook =
-            XLSX.readFile(excelPath);
+            XLSX.readFile(excelPath, { cellDates: true });
 
         let worksheetName =
             WORKSHEET_NAME;
@@ -71,14 +73,19 @@ excelFiles.forEach(file => {
         const worksheet =
             workbook.Sheets[worksheetName];
 
-        const jsonData =
+        // raw: true → JS Date objects and real booleans
+        const rawData =
             XLSX.utils.sheet_to_json(
                 worksheet,
                 {
                     defval: '',
-                    raw:    false
+                    raw:    true
                 }
             );
+
+        // Normalise dates (→ yyyy-mm-dd) and booleans (→ lowercase)
+        const jsonData =
+            rawData.map(row => sanitizeRow(row));
 
         const csvData =
             Papa.unparse(jsonData);
