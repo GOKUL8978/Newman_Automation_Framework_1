@@ -30,7 +30,8 @@ const generateExtentReport = require('./generate-extent-report');
 
 const {
     getValueFromPath,
-    getFileConfig
+    getFileConfig,
+    sanitizeRow
 } = require('./utils');
 
 // ======================================================
@@ -174,7 +175,7 @@ const inputFile =
 function readExcelData(excelPath, worksheetName) {
 
     const workbook =
-        XLSX.readFile(excelPath);
+        XLSX.readFile(excelPath, { cellDates: true });
 
     if (
         !worksheetName ||
@@ -189,10 +190,18 @@ function readExcelData(excelPath, worksheetName) {
     const worksheet =
         workbook.Sheets[worksheetName];
 
-    return XLSX.utils.sheet_to_json(
-        worksheet,
-        { defval: '', raw: false }
-    );
+    // raw: true  → dates come back as JS Date objects, booleans as true/false
+    // defval: '' → missing cells become empty string (not undefined)
+    const rawRows =
+        XLSX.utils.sheet_to_json(
+            worksheet,
+            { defval: '', raw: true }
+        );
+
+    // Normalise every row: yyyy-mm-dd dates, lowercase booleans.
+    // Invalid date strings are passed through unchanged so that
+    // negative-scenario rows still reach the API as-is.
+    return rawRows.map(row => sanitizeRow(row));
 }
 
 // ======================================================
@@ -386,13 +395,13 @@ async function main() {
                         skipEmptyLines: true
                     });
 
-                iterationDataRows = parsed.data;
+                iterationDataRows = parsed.data.map(row => sanitizeRow(row));
 
             } catch {
                 iterationDataRows = [];
             }
 
-            newmanOptions.iterationData = inputFile;
+            newmanOptions.iterationData = iterationDataRows;
 
             console.log(`📄 Using CSV File: ${inputFile}`);
         }
@@ -778,7 +787,7 @@ function updateDataFile(
         if (filePath.endsWith('.xlsx')) {
 
             const workbook =
-                XLSX.readFile(filePath);
+                XLSX.readFile(filePath, { cellDates: true });
 
             const worksheetName =
                 config.worksheet &&
@@ -789,11 +798,13 @@ function updateDataFile(
             const worksheet =
                 workbook.Sheets[worksheetName];
 
-            const jsonData =
+            const rawData =
                 XLSX.utils.sheet_to_json(
                     worksheet,
-                    { defval: '', raw: false }
+                    { defval: '', raw: true }
                 );
+
+            const jsonData = rawData.map(row => sanitizeRow(row));
 
             jsonData.forEach((row, i) => {
 
