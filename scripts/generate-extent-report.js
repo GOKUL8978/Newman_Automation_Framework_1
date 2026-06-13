@@ -330,7 +330,7 @@ function generateExtentReport(reportFolder, evidenceData, meta) {
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0"/>
 <title>${colName} — Extent Report</title>
 <style>
 /* ── dark vars ──────────────────────────────────────── */
@@ -356,7 +356,7 @@ function generateExtentReport(reportFolder, evidenceData, meta) {
     --btn-bg:#e4e8ed;
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:15px;transition:background .2s,color .2s;}
+html{font-size:16px;}body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:1rem;transition:background .2s,color .2s;-webkit-text-size-adjust:100%;text-size-adjust:100%;}
 
 /* ── navbar ─────────────────────────────────────────── */
 .nav{background:var(--nav-bg);color:#fff;height:56px;padding:0 18px;display:flex;align-items:center;position:sticky;top:0;z-index:300;box-shadow:0 1px 0 rgba(255,255,255,.08);}
@@ -374,7 +374,7 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
 
 /* ── pages ───────────────────────────────────────────── */
 .page{display:none;}
-.page.active{display:flex;flex-direction:column;}
+.page.active{display:flex;flex-direction:column;height:calc(100vh - 56px);overflow:hidden;}
 
 /* ── dashboard ──────────────────────────────────────── */
 .dash{background:var(--bg);padding:14px 18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid var(--border);}
@@ -393,7 +393,7 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
 .ms b{color:var(--text);}
 
 /* ── layout (tests page) ────────────────────────────── */
-.layout{display:flex;flex:1;min-height:0;}
+.layout{display:flex;flex:1;min-height:0;overflow:hidden;}
 
 /* ── sidebar ────────────────────────────────────────── */
 .sidebar{width:360px;min-width:260px;background:var(--sb-bg);border-right:1px solid var(--border);flex-shrink:0;display:flex;flex-direction:column;}
@@ -435,15 +435,17 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
 .sc-oth{background:rgba(139,148,158,.15);color:#8b949e;border:1px solid rgba(139,148,158,.3);}
 
 /* ── content pane ───────────────────────────────────── */
-.ct{flex:1;overflow-y:auto;padding:14px;background:var(--bg);}
-.ph{text-align:center;color:var(--text3);margin-top:80px;font-size:14px;}
+.ct{flex:1;overflow:hidden;padding:0;background:var(--bg);display:flex;flex-direction:column;}
+.ph{text-align:center;color:var(--text3);margin-top:80px;font-size:14px;padding:14px;}
 .ph-ico{font-size:44px;margin-bottom:10px;}
 
 /* ── test panel ─────────────────────────────────────── */
-.tp{border:1px solid var(--border);border-radius:8px;overflow:hidden;}
-.tph{padding:12px 15px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+.tp{border:1px solid var(--border);border-radius:0;overflow-y:auto;flex:1;display:flex;flex-direction:column;}
+.tph{padding:12px 15px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;position:sticky;top:0;z-index:10;background:var(--panel-bg);}
 .tph.pass{background:rgba(63,185,80,.07);border-left:4px solid #3fb950;}
 .tph.fail{background:rgba(248,81,73,.07);border-left:4px solid #f85149;}
+.tph.pass.sticky-hdr{background:rgba(63,185,80,.12);}
+.tph.fail.sticky-hdr{background:rgba(248,81,73,.12);}
 .tph-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .tph-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .t-name{font-size:15px;font-weight:600;color:var(--text);}
@@ -454,7 +456,7 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
 .dl-btn:hover{background:var(--bg4);}
 
 /* ── api accordion ──────────────────────────────────── */
-.api-list{background:var(--panel-bg);}
+.api-list{background:var(--panel-bg);flex:1;}
 .ab{border-bottom:1px solid var(--border);}
 .ab:last-child{border-bottom:none;}
 .ab.pass .ah{border-left:3px solid #3fb950;}.ab.fail .ah{border-left:3px solid #f85149;}
@@ -603,15 +605,15 @@ body{font-family:'Segoe UI',system-ui,Arial,sans-serif;background:var(--bg);colo
 .ov-num.fail{background:rgba(248,81,73,.18);color:#f85149;border:1px solid rgba(248,81,73,.35);}
 .ov-arrow{display:inline-block;font-size:10px;color:var(--text3);margin-right:6px;transition:transform .18s;}
 .ov-arrow.open{transform:rotate(90deg);}
-.ov-tc-name,.ov-c1{text-align:center;}
+.ov-c1{text-align:center;}.ov-tc-name{text-align:left;}
 .ov-c3,.ov-c4,.ov-c5,.ov-c6{text-align:center;}
 /* API sub-rows — directly in same table, no nesting */
-.ov-api-row td{padding:7px 12px;border-bottom:1px solid var(--td-sep);background:var(--bg3);color:var(--text);font-size:12px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;}
+.ov-api-row td{padding:7px 12px;border-bottom:1px solid var(--td-sep);background:var(--bg3);color:var(--text);font-size:12px;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;text-align:center;}.ov-api-row td.ov-c2{text-align:left;}
 .ov-api-row:last-of-type td,.ov-iter-row + .ov-iter-row td{border-top:1px solid var(--border);}
 .ov-api-row:hover td{background:var(--bg4);}
 /* indent the API name to show hierarchy */
 .ov-indent{display:inline-block;width:22px;flex-shrink:0;}
-.ov-api-cell{display:table-cell;vertical-align:middle;}
+.ov-api-cell{vertical-align:middle;text-align:left;}
 .ov-api-label{font-weight:500;vertical-align:middle;margin-left:5px;}
 .ov-muted{color:var(--text2);font-size:12px;}
 </style>
@@ -881,9 +883,10 @@ function showTest(idx) {
     document.getElementById('ph').style.display='none';
     document.querySelectorAll('.tp').forEach(function(p){ p.style.display='none'; });
     document.querySelectorAll('.si').forEach(function(s){ s.classList.remove('active'); });
-    document.getElementById('tp-'+idx).style.display='block';
+    var tp = document.getElementById('tp-'+idx);
+    tp.style.display='flex';
+    tp.scrollTop=0;
     document.getElementById('si-'+idx).classList.add('active');
-    document.getElementById('ct').scrollTop=0;
     activeIdx=idx;
 }
 
