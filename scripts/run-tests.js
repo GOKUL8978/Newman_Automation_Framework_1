@@ -236,43 +236,96 @@ const resultStore = {};
 let iterationDataRows = [];
 
 // ======================================================
-// BUILD REQUEST → FOLDER MAP
-// (walks the loaded collection tree)
+// BUILD FLAT EXECUTION SEQUENCE
+// (walks the loaded collection tree in the SAME order
+//  Newman executes requests)
+//
+// Returns an array of { folder, name } in execution order.
+// This is collision-proof for duplicate API names because
+// we match executions by POSITION (cursor.position / a
+// running counter), not by name.
+//
+// If `onlyFolder` is given, only items under that folder
+// are included (matches newmanOptions.folder behaviour) —
+// all entries get folder = onlyFolder.
 // ======================================================
 
-function buildRequestFolderMap(
+function buildExecutionSequence(
     items,
     currentFolder = null,
-    map = {}
+    onlyFolder = null,
+    sequence = [],
+    insideTarget = !onlyFolder
 ) {
 
-    if (!Array.isArray(items)) return map;
+    if (!Array.isArray(items)) return sequence;
 
     items.forEach(item => {
 
         if (item.item) {
 
-            buildRequestFolderMap(
+            const isThisTheTargetFolder =
+                onlyFolder && item.name === onlyFolder;
+
+            buildExecutionSequence(
                 item.item,
                 item.name,
-                map
+                onlyFolder,
+                sequence,
+                insideTarget || isThisTheTargetFolder
             );
 
-        } else {
+        } else if (insideTarget) {
 
-            map[item.name] =
-                currentFolder || 'ROOT';
+            sequence.push({
+                folder: currentFolder || 'ROOT',
+                name:   item.name
+            });
         }
     });
 
-    return map;
+    return sequence;
+}
+
+/**
+ * Resolves { folder, apiKey } for a Newman execution/request
+ * event using its position in the run (cursor.position),
+ * indexed into the pre-built executionSequence.
+ *
+ * Falls back to the request's own name/folder guess if the
+ * position is out of range (shouldn't normally happen).
+ */
+function resolveByPosition(position, requestName, executionSequence) {
+
+    const entry = executionSequence[position];
+
+    if (entry) {
+        return {
+            folder: entry.folder,
+            apiKey: `${entry.folder}::${requestName}`
+        };
+    }
+
+    return {
+        folder: 'ROOT',
+        apiKey: `ROOT::${requestName}`
+    };
 }
 
 // ======================================================
 // MAIN
 // ======================================================
 
+
 async function main() {
+
+    // ── 0. ensure report folder exists ─────────────────
+    //
+    // Newman's html reporter creates this as a side-effect,
+    // but evidence/extent reports are written independently
+    // and must not depend on that ordering.
+
+    fs.mkdirSync(reportFolder, { recursive: true });
 
     // ── 1. load live-collection.json ───────────────────
     //
@@ -314,10 +367,15 @@ async function main() {
         `\n🚀 Starting test run: ${targetFolder || 'ROOT'}`
     );
 
-    // ── 4. build request→folder map ────────────────────
+    // ── 4. build flat execution-order sequence ─────────
+    // (collision-proof folder resolution by position)
 
-    const requestFolderMap =
-        buildRequestFolderMap(liveCollection.item);
+    const executionSequence =
+        buildExecutionSequence(
+            liveCollection.item,
+            null,
+            targetFolder || null
+        );
 
     // ── 5. build newman options ────────────────────────
 
@@ -441,8 +499,17 @@ async function main() {
         const requestName =
             args.item.name;
 
-        const folderName =
-            requestFolderMap[requestName] || 'ROOT';
+        const iteration =
+            args.cursor.iteration;
+
+        const position =
+            args.cursor.position;
+
+        // Resolve folder + unique apiKey by execution position —
+        // collision-proof even when two folders (or the same
+        // folder) contain requests with identical names.
+        const { folder: folderName, apiKey } =
+            resolveByPosition(position, requestName, executionSequence);
 
         // skip requests outside the target folder
         if (
@@ -453,8 +520,6 @@ async function main() {
             return;
         }
 
-        const iteration =
-            args.cursor.iteration;
 
         const requestBody =
             args.request.body?.raw || '';
@@ -484,7 +549,9 @@ async function main() {
         }
 
         iterationApiStore[iteration].push({
-            apiName:         requestName,
+            apiKey:          apiKey,          // unique: "Folder::Name"
+            apiName:         requestName,     // display name (original)
+            folderName:      folderName,      // parent folder
             method:          args.request.method || 'GET',
             url:             args.request.url?.toString() || '',
             statusCode:      statusCode,
@@ -563,13 +630,22 @@ async function main() {
 
         // ── collect pass/fail per API per iteration ────
 
-        summary.run.executions.forEach(exec => {
+        summary.run.executions.forEach((exec) => {
 
             const requestName =
                 exec.item.name;
 
-            const folderName =
-                requestFolderMap[requestName] || 'ROOT';
+            const i =
+                exec.cursor.iteration;
+
+            // cursor.position is the per-iteration index of this
+            // request — matches the index into executionSequence
+            // (which represents one iteration's worth of requests
+            // in collection order).
+            const cursorPosition = exec.cursor.position;
+
+            const { folder: folderName, apiKey } =
+                resolveByPosition(cursorPosition, requestName, executionSequence);
 
             if (
                 targetFolder &&
@@ -579,9 +655,6 @@ async function main() {
                 return;
             }
 
-            const i =
-                exec.cursor.iteration;
-
             const passed =
                 exec.assertions?.every(a => !a.error) ?? true;
 
@@ -589,11 +662,16 @@ async function main() {
                 passed ? 'PASSED' : 'FAILED';
 
             // mark result + assertions in iterationApiStore
+            // Match by apiKey (collision-proof) — fallback to
+            // first unresolved entry with the same name + iteration.
             if (iterationApiStore[i]) {
 
                 const apiEntry =
                     iterationApiStore[i].find(
-                        a => a.apiName === requestName
+                        a => a.apiKey === apiKey
+                    ) ||
+                    iterationApiStore[i].find(
+                        a => a.apiName === requestName && a.result === null
                     );
 
                 if (apiEntry) {
@@ -710,12 +788,21 @@ async function main() {
             const storeKey =
                 targetFolder || 'ROOT';
 
-            await updateDataFile(
-                inputFile,
-                responseStore[storeKey] || [],
-                resultStore[storeKey]   || [],
-                currentFolderConfig
-            );
+            try {
+                await updateDataFile(
+                    inputFile,
+                    responseStore[storeKey] || [],
+                    resultStore[storeKey]   || [],
+                    currentFolderConfig
+                );
+            } catch (updateErr) {
+                console.log(
+                    `⚠️  Data file update error: ${updateErr.message}`
+                );
+                console.log(
+                    '   Continuing to generate extent report...'
+                );
+            }
         }
 
         // ── generate extent report ────────────────────
@@ -748,23 +835,40 @@ async function main() {
             if (ef) summaryEvidenceFile = path.join(reportFolder, ef);
         } catch {}
 
-        generateExtentReport(
-            reportFolder,
-            evidenceData,
-            {
-                collectionName:  liveCollection.info?.name || 'Newman Tests',
-                folderName:      targetFolder || 'ROOT',
-                startTime:       runStartTime,
-                endTime:         runEndTime,
-                totalDuration:   runEndTime - runStartTime,
-                dataFilePath:    summaryDataFile,
-                evidenceFile:    summaryEvidenceFile,
-                evidenceFormat:  evidenceFormat
-            }
-        );
+        let extentGenerated = false;
+
+        try {
+            generateExtentReport(
+                reportFolder,
+                evidenceData,
+                {
+                    collectionName:  liveCollection.info?.name || 'Newman Tests',
+                    folderName:      targetFolder || 'ROOT',
+                    startTime:       runStartTime,
+                    endTime:         runEndTime,
+                    totalDuration:   runEndTime - runStartTime,
+                    dataFilePath:    summaryDataFile,
+                    evidenceFile:    summaryEvidenceFile,
+                    evidenceFormat:  evidenceFormat
+                }
+            );
+
+            extentGenerated =
+                fs.existsSync(path.join(reportFolder, 'extent-report.html'));
+
+        } catch (extentErr) {
+            console.log(`❌ Extent report generation failed: ${extentErr.message}`);
+            console.log(extentErr.stack);
+        }
 
         console.log('\n🎉 Execution Completed');
-        console.log(`📁 Extent Report:  ${reportFolder}/extent-report.html`);
+
+        if (extentGenerated) {
+            console.log(`📁 Extent Report:  ${reportFolder}/extent-report.html`);
+        } else {
+            console.log(`⚠️  Extent Report was NOT generated in: ${reportFolder}`);
+        }
+
         console.log(`📁 HTML Report:    ${reportFolder}/report.html`);
     });
 }
@@ -818,12 +922,45 @@ function updateDataFile(
                 }
             });
 
-            workbook.Sheets[worksheetName] =
-                XLSX.utils.json_to_sheet(jsonData);
+            // Coerce every cell value to a primitive xlsx can handle.
+            // Objects, Arrays, null, undefined → empty string.
+            // This prevents the "cell.length is not a function" /
+            // "Cannot read properties of undefined (reading 'length')"
+            // crash that xlsx throws when it encounters unexpected types.
+            const safeData = jsonData.map(row => {
+                const safe = {};
+                Object.keys(row).forEach(key => {
+                    const v = row[key];
+                    if (v === null || v === undefined) {
+                        safe[key] = '';
+                    } else if (typeof v === 'object' && !(v instanceof Date)) {
+                        safe[key] = JSON.stringify(v);
+                    } else {
+                        safe[key] = v;
+                    }
+                });
+                return safe;
+            });
 
-            XLSX.writeFile(workbook, filePath);
+            try {
+                workbook.Sheets[worksheetName] =
+                    XLSX.utils.json_to_sheet(safeData);
 
-            console.log(`📘 Updated Excel: ${filePath}`);
+                XLSX.writeFile(workbook, filePath);
+
+                console.log(`📘 Updated Excel: ${filePath}`);
+
+            } catch (xlsxErr) {
+
+                console.log(
+                    `⚠️  Excel write failed: ${xlsxErr.message}`
+                );
+                console.log(
+                    '   Test data file was NOT updated — ' +
+                    'all other reports were still generated.'
+                );
+                return resolve();
+            }
 
             // copy to reports
             if (copyTestDataToReports) {
